@@ -1012,7 +1012,7 @@ function rDash(){
  let posBek=0;for(const p of S.posEntries)if(p.co===co&&p.status==='bekliyor')posBek+=+p.net;
  const rems=reminders(co);
  const overdue=rems.filter(r=>r.df<=0).length;
- const recent=S.txns.filter(x=>x.co===co).sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0).slice(0,10);
+ const recent=S.txns.filter(x=>x.co===co&&!x.deletedAt).sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0).slice(0,10);
  const ds=dailySeries(co,30);
  const dun=sumRange(co,addDays(todayISO(),-1),addDays(todayISO(),-1));
  const fark=dun.gelir?((t.gelir-dun.gelir)/dun.gelir*100):0;
@@ -1150,7 +1150,7 @@ function virmanForm(fromId){
 }
 function accEkstre(id){
  const a=S.accounts.find(x=>x.id===id);if(!a)return;
- const list=S.txns.filter(t=>t.co===CO&&(t.accId===id||t.accId2===id)).sort((x,y)=>x.date<y.date?-1:1);
+ const list=S.txns.filter(t=>t.co===CO&&!t.deletedAt&&(t.accId===id||t.accId2===id)).sort((x,y)=>x.date<y.date?-1:1);
  let run=+a.opening||0;
  const rows=list.map(t=>{
   let delta=0;
@@ -1175,7 +1175,7 @@ function txSetFrom(v){txFilter.from=v;rTx();}
 function txSetTo(v){txFilter.to=v;rTx();}
 function txClear(){txFilter={type:'',cat:'',from:'',to:''};rTx();}
 function rTx(){
- let list=S.txns.filter(t=>t.co===CO);
+ let list=S.txns.filter(t=>t.co===CO&&!t.deletedAt);
  const f=txFilter;
  if(f.type)list=list.filter(t=>t.type===f.type);
  if(f.cat)list=list.filter(t=>t.cat===f.cat);
@@ -1381,7 +1381,7 @@ function cardTxnForm(cardId,type){
 }
 function cardEkstre(id){
  const c=S.cards.find(x=>x.id===id);if(!c)return;
- const list=S.cardTxns.filter(t=>t.cardId===id).sort((a,b)=>a.date<b.date?1:-1);
+ const list=S.cardTxns.filter(t=>t.cardId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
  document.getElementById('cardEkstreBox').innerHTML=
   `<div class="card"><h2>Kart Ekstresi — ${esc(c.name)}</h2>
    ${list.length?'<table><thead><tr><th>Tarih</th><th>İşlem</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+
@@ -1425,7 +1425,7 @@ function rCari(){
  </div>`:''}
  ${rows.length? `<div class="grid g2">`+rows.map(({c,b})=>{
    const col=hashColor(c.name);
-   const vadeli=S.cariTxns.filter(t=>t.cariId===c.id&&t.vade&&daysDiff(t.vade)<=7&&daysDiff(t.vade)>=-30);
+   const vadeli=S.cariTxns.filter(t=>t.cariId===c.id&&!t.deletedAt&&t.vade&&daysDiff(t.vade)<=7&&daysDiff(t.vade)>=-30);
    return `<div class="card accCard" style="--ac:${col}">
     <div class="accHead"><span class="avat" style="background:${col}">${esc(c.name.charAt(0).toUpperCase())}</span>
      <div><b>${esc(c.name)}</b><div class="tiny">${esc(c.phone||'')} ${c.taxNo?'· VN: '+esc(c.taxNo):''}</div></div>
@@ -1520,7 +1520,7 @@ function cariInvoiceForm(cariId){
 }
 function cariEkstre(id){
  const c=S.cari.find(x=>x.id===id);if(!c)return;
- const list=S.cariTxns.filter(t=>t.cariId===id).sort((a,b)=>a.date<b.date?-1:1);
+ const list=S.cariTxns.filter(t=>t.cariId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?-1:1);
  let run=+c.opening||0;
  const rows=list.map(t=>{const d=t.type==='borc'?+t.amount:-t.amount;run+=d;
   const vatTag=(t.fatura&&t.vat)?` <span class="tiny">(KDV %${esc(t.vat)}, tutarı: ${fmt(+t.amount*t.vat/(100+ +t.vat))})</span>`:'';
@@ -1544,8 +1544,8 @@ function rStaff(){
  const list=byCo(S.staff,CO).filter(s=>s.active!=='0');
  const inactiveList=byCo(S.staff,CO).filter(s=>s.active==='0'); // v31: pasif personeli görüp yönetebilme
  const mo=monthISO();
- const pays=S.staffTxns.filter(t=>t.co===CO).sort((a,b)=>a.date<b.date?1:-1);
- const lvs=S.leaves.filter(l=>l.co===CO).sort((a,b)=>a.start<b.start?1:-1);
+ const pays=S.staffTxns.filter(t=>t.co===CO&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
+ const lvs=S.leaves.filter(l=>l.co===CO&&!l.deletedAt).sort((a,b)=>a.start<b.start?1:-1);
  const ayOdeme=pays.filter(t=>t.date.startsWith(mo)&&(t.type==='maas'||t.type==='avans')).reduce((s,t)=>s+ +t.amount,0);
  const ms=monthSeries(CO,6,'Personel');
  const TT={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
@@ -1655,8 +1655,8 @@ function staffReactivate(id){
 }
 function staffHist(id){
  const st=S.staff.find(x=>x.id===id);if(!st)return;
- const pays=S.staffTxns.filter(t=>t.staffId===id).sort((a,b)=>a.date<b.date?1:-1);
- const lvs=S.leaves.filter(l=>l.staffId===id).sort((a,b)=>a.start<b.start?1:-1);
+ const pays=S.staffTxns.filter(t=>t.staffId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
+ const lvs=S.leaves.filter(l=>l.staffId===id&&!l.deletedAt).sort((a,b)=>a.start<b.start?1:-1);
  const TT={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
  const LT={yillik:'Yıllık izin',ucretsiz:'Ücretsiz izin',rapor:'Sağlık raporu',mazeret:'Mazeret'};
  document.getElementById('staffHistBox').innerHTML=
@@ -1687,7 +1687,7 @@ function rFixed(){
  const byType={};for(const f of list)byType[f.type]=(byType[f.type]||0)+ +f.amount;
  const aylikYuk=list.reduce((s,f)=>s+ +f.amount,0);
  const odenen=S.fixedLogs.filter(l=>l.co===CO&&l.period===per).reduce((s,l)=>s+ +l.amount,0);
- const logs=S.fixedLogs.filter(l=>l.co===CO).sort((a,b)=>a.paidDate<b.paidDate?1:-1);
+ const logs=S.fixedLogs.filter(l=>l.co===CO&&!l.deletedAt).sort((a,b)=>a.paidDate<b.paidDate?1:-1);
 
  document.getElementById('main').innerHTML= topbar('Sabit & Resmi Ödemeler',
   `<button class="btn" data-act="fixedForm">＋ Ödeme Tanımla</button>`)+
@@ -1745,7 +1745,7 @@ function payFixed(fid){
 }
 function fixedHist(fid){
  const f=S.fixed.find(x=>x.id===fid);if(!f)return;
- const logs=S.fixedLogs.filter(l=>l.fixedId===fid).sort((a,b)=>a.period<b.period?1:-1);
+ const logs=S.fixedLogs.filter(l=>l.fixedId===fid&&!l.deletedAt).sort((a,b)=>a.period<b.period?1:-1);
  document.getElementById('fixedHistBox').innerHTML=
  `<div class="card"><h2>Ödeme Geçmişi — ${esc(f.name)}</h2>
   ${logs.length?'<table><thead><tr><th>Dönem</th><th>Ödeme Tarihi</th><th class="num">Tutar</th><th></th></tr></thead><tbody>'+
@@ -2345,7 +2345,7 @@ function modSum(kind){
  if(kind==='acc'){
   const accsF=byCo(S.accounts,co).filter(a=>accTab==='all'||a.type===accTab);
   const ids=new Set(accsF.map(a=>a.id));
-  const list=S.txns.filter(t=>t.co===co&&(ids.has(t.accId)||ids.has(t.accId2))).sort((a,b)=>a.date<b.date?1:-1);
+  const list=S.txns.filter(t=>t.co===co&&!t.deletedAt&&(ids.has(t.accId)||ids.has(t.accId2))).sort((a,b)=>a.date<b.date?1:-1);
   if(!list.length)return '';
   let gir=0,cik=0;
   const perAcc=accsF.map(a=>{
@@ -2380,7 +2380,7 @@ function modSum(kind){
    ${foot([['<b>TOPLAM</b>'],[ '<b>'+TC+'</b>','num'],['<b>'+fmt(TG)+'</b>','num'],['<b>-'+fmt(TK)+'</b>','num'],['<b>'+fmt(TN)+'</b>','num']])}</tbody></table></div>`;
  }
  if(kind==='card'){
-  const list=S.cardTxns.filter(t=>t.co===co).sort((a,b)=>a.date<b.date?1:-1);
+  const list=S.cardTxns.filter(t=>t.co===co&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
   if(!list.length)return '';
   let H=0,O=0;
   const rows=list.slice(0,30).map(t=>{const c=S.cards.find(x=>x.id===t.cardId)||{};
@@ -2398,7 +2398,7 @@ function modSum(kind){
   const isT=c=>c.type==='tedarikci'||c.type==='her2';
   const uygun=id=>{const c=S.cari.find(x=>x.id===id);if(!c)return false;
    return cariTab==='musteri'?isM(c):cariTab==='tedarikci'?isT(c):cariTab==='diger'?c.type==='diger':true;};
-  const list=S.cariTxns.filter(t=>t.co===co&&uygun(t.cariId)).sort((a,b)=>a.date<b.date?1:-1);
+  const list=S.cariTxns.filter(t=>t.co===co&&!t.deletedAt&&uygun(t.cariId)).sort((a,b)=>a.date<b.date?1:-1);
   if(!list.length)return '';
   let B=0,A=0;
   const rows=list.slice(0,30).map(t=>{const c=S.cari.find(x=>x.id===t.cariId)||{};
@@ -2410,7 +2410,7 @@ function modSum(kind){
    ${foot([['<b>TOPLAM</b>'],[''],['<b>'+fmt(B)+'</b>','num'],['<b>'+fmt(A)+'</b>','num']])}</tbody></table></div>`;
  }
  if(kind==='staff'){
-  const pays=S.staffTxns.filter(t=>t.co===co);
+  const pays=S.staffTxns.filter(t=>t.co===co&&!t.deletedAt);
   if(!pays.length)return '';
   const months={};
   for(const t of pays){const p=(t.period||t.date.slice(0,7));months[p]=months[p]||{maas:0,avans:0,prim:0,kesinti:0};months[p][t.type]=(months[p][t.type]||0)+ +t.amount;}
@@ -3169,14 +3169,14 @@ function findEntity(words,coList,pre){
   for(var x=0;x<caris.length;x++){var nm=trLow(caris[x].name);
    if(words.some(function(w){return nm.indexOf(w)>-1;})){
     var bb2=cariBalance(caris[x]);
-    var last=S.cariTxns.filter(function(t){return t.cariId===caris[x].id;}).sort(function(a,b){return a.date<b.date?1:-1;})[0];
+    var last=S.cariTxns.filter(function(t){return t.cariId===caris[x].id&&!t.deletedAt;}).sort(function(a,b){return a.date<b.date?1:-1;})[0];
     return pre(c)+caris[x].name+' bakiyesi: '+fmt(Math.abs(bb2))+' '+(bb2>0?'(bize borçlu)':bb2<0?'(biz borçluyuz)':'(kapalı)')+(last?'. Son hareket: '+dTR(last.date)+' '+(last.type==='borc'?'borç':'alacak')+' '+fmt0(last.amount):'');}}
   var stf=byCo(S.staff,c);
   for(var y=0;y<stf.length;y++){var sn=trLow(stf[y].name);
    if(words.some(function(w){return sn.indexOf(w)>-1;})){
     var st=stf[y];
     var odenen=S.staffTxns.filter(function(t){return t.staffId===st.id&&t.period===monthISO();}).reduce(function(s2,t){return s2+ +t.amount;},0);
-    var izin=S.leaves.filter(function(l){return l.staffId===st.id;}).length;
+    var izin=S.leaves.filter(function(l){return l.staffId===st.id&&!l.deletedAt;}).length;
     return pre(c)+st.name+' ('+(st.pos||'personel')+') — net maaş '+fmt0(st.salary)+', bu ay ödenen '+fmt0(odenen)+', kayıtlı izin/rapor: '+izin;}}
  }
  return null;
@@ -3375,7 +3375,7 @@ function costFindings(co){
   if(prev>1000&&a30[cc]>prev*1.25)F.push({t:'Hızlanan gider: '+cc,d:'Son 30 gün '+fmt0(a30[cc])+' — önceki 30 güne ('+fmt0(prev)+') göre %'+(((a30[cc]-prev)/prev)*100).toFixed(0)+' artış.'});
  });
  byCo(S.fixed,co).forEach(function(f){
-  var logs=S.fixedLogs.filter(function(l){return l.fixedId===f.id;}).sort(function(a,b){return a.period<b.period?-1:1;});
+  var logs=S.fixedLogs.filter(function(l){return l.fixedId===f.id&&!l.deletedAt;}).sort(function(a,b){return a.period<b.period?-1:1;});
   if(logs.length>=4){
    var last=+logs[logs.length-1].amount;
    var prev3=logs.slice(-4,-1);
@@ -3404,7 +3404,7 @@ function cariRiskRows(co){
  var out=[];
  byCo(S.cari,co).forEach(function(c){
   var b=cariBalance(c);if(b<=0)return;
-  var od=S.cariTxns.filter(function(t){return t.cariId===c.id&&t.type==='borc'&&t.vade&&daysDiff(t.vade)<0;});
+  var od=S.cariTxns.filter(function(t){return t.cariId===c.id&&!t.deletedAt&&t.type==='borc'&&t.vade&&daysDiff(t.vade)<0;});
   var maxG=od.reduce(function(m,t){return Math.max(m,-daysDiff(t.vade));},0);
   var odSum=od.reduce(function(s,t){return s+ +t.amount;},0);
   var skor=Math.min(100,Math.round(maxG*1.5+(odSum/b)*40+((+c.riskLimit>0&&b>+c.riskLimit)?25:0)));
@@ -3431,7 +3431,7 @@ function aiCariRisk(){
 async function aiCollectMail(cariId){
  var c=S.cari.find(function(x){return x.id===cariId;});if(!c)return;
  var b=cariBalance(c);
- var od=S.cariTxns.filter(function(t){return t.cariId===c.id&&t.type==='borc'&&t.vade&&daysDiff(t.vade)<0;})
+ var od=S.cariTxns.filter(function(t){return t.cariId===c.id&&!t.deletedAt&&t.type==='borc'&&t.vade&&daysDiff(t.vade)<0;})
   .map(function(t){return {tarih:t.date,vade:t.vade,tutar:+t.amount,aciklama:t.desc||''};});
  var odT=od.reduce(function(s,t){return s+t.tutar;},0);
  var loc='Konu: '+coName(CO)+' — Hesap Bakiyesi Hatırlatması\n\nSayın '+c.name+' yetkilisi,\n\nKayıtlarımıza göre '+dTR(todayISO())+' itibarıyla hesabınızda '+fmt(b)+' tutarında bakiye bulunmaktadır'+(od.length?' ve bunun '+fmt0(odT)+' tutarındaki kısmının vadesi geçmiştir':'')+'. Ödeme planınız hakkında bilgi verebilirseniz seviniriz; mutabakat için güncel ekstrenizi paylaşabiliriz.\n\nİyi çalışmalar dileriz,\n'+coName(CO)+' Muhasebe';
