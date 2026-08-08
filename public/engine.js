@@ -623,7 +623,7 @@ function dailySeries(co,days){ // gelir/gider günlük serileri (tek geçiş)
  const start=addDays(todayISO(),-(days-1));
  const g={},x={};
  for(const t of S.txns){
-  if(t.co!==co||t.type==='virman'||t.date<start||t.deletedAt)continue;
+  if(t.co!==co||t.type==='virman'||t.date<start||t.deletedAt||t.xfer)continue;
   if(t.type==='gelir')g[t.date]=(g[t.date]||0)+ +t.amount;
   else x[t.date]=(x[t.date]||0)+ +t.amount;
  }
@@ -638,7 +638,7 @@ function monthSeries(co,n,cat){ // son N ay {p,label,gelir,gider}
   const p=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
   let g=0,x=0;
   for(const t of S.txns){
-   if(t.co!==co||t.type==='virman'||!t.date.startsWith(p)||t.deletedAt)continue;
+   if(t.co!==co||t.type==='virman'||!t.date.startsWith(p)||t.deletedAt||t.xfer)continue;
    if(cat&&t.cat!==cat)continue;
    if(t.type==='gelir')g+=+t.amount;else x+=+t.amount;
   }
@@ -665,7 +665,7 @@ function nextDue(day){
 function sumRange(co,from,to){
  let g=0,x=0,byCat={},byCatG={};
  for(const t of S.txns){
-  if(t.co!==co||t.type==='virman'||t.deletedAt)continue;
+  if(t.co!==co||t.type==='virman'||t.deletedAt||t.xfer)continue;
   if(t.date<from||t.date>to)continue;
   if(t.type==='gelir'){g+=+t.amount;byCatG[t.cat||'Diğer']=(byCatG[t.cat||'Diğer']||0)+ +t.amount;}
   else {x+=+t.amount; byCat[t.cat||'Diğer']=(byCat[t.cat||'Diğer']||0)+ +t.amount;}
@@ -933,22 +933,22 @@ function cascadeSoftDelete(arr,matchFn){
 function del(kind,id){
  const R={
   acc:['Hesap silinsin mi? (Hareket kayıtları korunur, çöp kutusuna taşınır)',()=>{softDelete(S.accounts,id,'acc',r=>'Hesap: '+r.name);}],
-  tx:['İşlem silinsin mi? (Çöp kutusuna taşınır, 30 gün içinde geri getirilebilir)',()=>{softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));}],
+  tx:['İşlem silinsin mi? (Bağlı kayıtlar da birlikte silinir; 30 gün içinde geri getirilebilir)',()=>{const rec=softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));if(rec){cascadeSoftDelete(S.fixedLogs,l=>l.txnId===id);if(rec.cariTxnId)cascadeSoftDelete(S.cariTxns,x=>x.id===rec.cariTxnId);if(rec.cardTxnId)cascadeSoftDelete(S.cardTxns,x=>x.id===rec.cardTxnId);}}],
   pos:['POS tanımı silinsin mi?',()=>{softDelete(S.pos,id,'pos',r=>'POS: '+r.name);}],
   posE:['POS girişi silinsin mi?',()=>{softDelete(S.posEntries,id,'posE',r=>'POS girişi: '+fmt0(r.net)+' ('+r.date+')');}],
   card:['Kart ve hareketleri silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.cards,id,'card',r=>'Kart: '+r.name);cascadeSoftDelete(S.cardTxns,t=>t.cardId===id);}],
-  cardT:['Kayıt silinsin mi?',()=>{softDelete(S.cardTxns,id,'cardT',r=>'Kart hareketi: '+fmt0(r.amount));}],
+  cardT:['Kayıt silinsin mi? (Bağlı gider/banka kaydı da birlikte silinir)',()=>{softDelete(S.cardTxns,id,'cardT',r=>'Kart hareketi: '+fmt0(r.amount));cascadeSoftDelete(S.txns,t=>t.cardTxnId===id);}],
   cari:['Cari ve tüm hareketleri silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.cari,id,'cari',r=>'Cari: '+r.name);cascadeSoftDelete(S.cariTxns,t=>t.cariId===id);}],
-  cariT:['Hareket silinsin mi?',()=>{softDelete(S.cariTxns,id,'cariT',r=>'Cari hareketi: '+fmt0(r.amount));}],
+  cariT:['Hareket silinsin mi? (Bağlı nakit/kart kaydı da birlikte silinir)',()=>{softDelete(S.cariTxns,id,'cariT',r=>'Cari hareketi: '+fmt0(r.amount));cascadeSoftDelete(S.txns,t=>t.cariTxnId===id);cascadeSoftDelete(S.cardTxns,t=>t.cariTxnId===id);}],
   staff:['Personel pasife alınsın mı? (Kayıtları korunur)',()=>{const s=S.staff.find(z=>z.id===id);if(s)s.active='0';}],
   staffPerma:['Personel kaydı KALICI olarak silinsin mi? (Çöp kutusuna taşınır, 30 gün içinde geri getirilebilir; ödeme ve izin geçmişi birlikte gizlenir)',()=>{softDelete(S.staff,id,'staffPerma',r=>'Personel (kalıcı): '+r.name);cascadeSoftDelete(S.staffTxns,t=>t.staffId===id);cascadeSoftDelete(S.leaves,t=>t.staffId===id);}],
-  staffT:['Kayıt silinsin mi?',()=>{softDelete(S.staffTxns,id,'staffT',r=>'Personel ödemesi: '+fmt0(r.amount));}],
+  staffT:['Kayıt silinsin mi? (Hesaptan düşen bağlı gider de birlikte silinir)',()=>{softDelete(S.staffTxns,id,'staffT',r=>'Personel ödemesi: '+fmt0(r.amount));cascadeSoftDelete(S.txns,t=>t.staffTxnId===id);}],
   leave:['İzin silinsin mi?',()=>{softDelete(S.leaves,id,'leave',()=>'İzin kaydı');}],
   fixed:['Tanım silinsin mi?',()=>{softDelete(S.fixed,id,'fixed',r=>'Sabit ödeme: '+r.name);}],
   fixedL:['Ödeme kaydı ve bağlı gider silinsin mi? (Çöp kutusuna taşınır)',()=>{const l=S.fixedLogs.find(z=>z.id===id);softDelete(S.fixedLogs,id,'fixedL',r=>'Ödeme kaydı: '+fmt0(r.amount));if(l&&l.txnId)cascadeSoftDelete(S.txns,t=>t.id===l.txnId);}],
   task:['Görev silinsin mi?',()=>{softDelete(S.tasks,id,'task',r=>'Görev: '+r.title);}],
   note:['Duyuru silinsin mi?',()=>{softDelete(S.notes,id,'note',()=>'Duyuru');}],
-  cek:['Çek/senet kaydı silinsin mi?',()=>{softDelete(S.cheques,id,'cek',r=>'Çek/Senet: '+(r.kisi||'')+' '+fmt0(r.tutar));}],
+  cek:['Çek/senet kaydı silinsin mi? (Tahsilat/ödeme kaydı varsa birlikte silinir)',()=>{softDelete(S.cheques,id,'cek',r=>'Çek/Senet: '+(r.kisi||'')+' '+fmt0(r.tutar));cascadeSoftDelete(S.txns,t=>t.cekId===id);}],
   stok:['Ürün ve stok hareketleri silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.stock,id,'stok',r=>'Ürün: '+r.name);cascadeSoftDelete(S.stockTxns,t=>t.itemId===id);}],
   stokT:['Stok hareketi silinsin mi?',()=>{softDelete(S.stockTxns,id,'stokT',()=>'Stok hareketi');}],
   asset:['Demirbaş silinsin mi?',()=>{softDelete(S.assets,id,'asset',r=>'Demirbaş: '+r.name);}],
@@ -973,6 +973,12 @@ function restoreTrash(idxStr){
  if(entry.kind==='stok')S.stockTxns.forEach(t=>{if(t.itemId===entry.id&&t.deletedAt){delete t.deletedAt;delete t.deletedBy;}});
  if(entry.kind==='staffPerma'){rec.active='0';S.staffTxns.forEach(t=>{if(t.staffId===entry.id&&t.deletedAt){delete t.deletedAt;delete t.deletedBy;}});S.leaves.forEach(t=>{if(t.staffId===entry.id&&t.deletedAt){delete t.deletedAt;delete t.deletedBy;}});}
  if(entry.kind==='fixedL'&&rec.txnId){const t=S.txns.find(x=>x.id===rec.txnId);if(t&&t.deletedAt){delete t.deletedAt;delete t.deletedBy;}}
+ var __und=function(t){if(t&&t.deletedAt){delete t.deletedAt;delete t.deletedBy;}};
+ if(entry.kind==='cariT'){S.txns.forEach(function(t){if(t.cariTxnId===entry.id)__und(t);});S.cardTxns.forEach(function(t){if(t.cariTxnId===entry.id)__und(t);});}
+ if(entry.kind==='cardT'){S.txns.forEach(function(t){if(t.cardTxnId===entry.id)__und(t);});}
+ if(entry.kind==='staffT'){S.txns.forEach(function(t){if(t.staffTxnId===entry.id)__und(t);});}
+ if(entry.kind==='cek'){S.txns.forEach(function(t){if(t.cekId===entry.id)__und(t);});}
+ if(entry.kind==='tx'){S.fixedLogs.forEach(function(l){if(l.txnId===entry.id)__und(l);});if(rec.cariTxnId)__und(S.cariTxns.find(function(x){return x.id===rec.cariTxnId;}));if(rec.cardTxnId)__und(S.cardTxns.find(function(x){return x.id===rec.cardTxnId;}));}
  S.trash=(S.trash||[]).filter((e,i)=>i!==idx);
  logAudit('Kayıt geri getirildi',entry.label||entry.kind);
  save();toast('Kayıt geri getirildi');go(PAGE);
@@ -1364,17 +1370,18 @@ function cardTxnForm(cardId,type){
  const flds= type==='harcama'
   ? [{row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
      {row:[{name:'cat',label:'Kategori',type:'select',opts:catOpts('gider'),req:1},{name:'taksit',label:'Taksit',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']]}]},
-     {name:'desc',label:'Açıklama',ph:'Ör: Metro toptan alışveriş'}]
+     {name:'cariId',label:'İlgili cari / tedarikçi (opsiyonel)',type:'select',opts:cariOpts(CO)},{name:'desc',label:'Açıklama',ph:'Ör: Metro toptan alışveriş'}]
   : [{row:[{name:'amount',label:'Ödeme tutarı (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
      {name:'accId',label:'Hangi hesaptan ödendi',type:'select',opts:accOpts(CO),req:1}];
  openForm(type==='harcama'?'Kart Harcaması':'Kart Ödemesi',flds,o=>{
-  S.cardTxns.push(stampCreate({id:nid(),co:CO,cardId,type,...o,amount:+o.amount,taksit:+o.taksit||1}));
+  var cdid=nid();
+  S.cardTxns.push(stampCreate({id:cdid,co:CO,cardId,type,...o,amount:+o.amount,taksit:+o.taksit||1}));
   const c=S.cards.find(x=>x.id===cardId)||{};
   if(type==='odeme'&&o.accId){
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:'Banka & Komisyon',accId:o.accId,desc:'Kredi kartı ödemesi: '+(c.name||'')}));
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:'Banka & Komisyon',accId:o.accId,cardTxnId:cdid,desc:'Kredi kartı ödemesi: '+(c.name||''),xfer:true}));
   }
   if(type==='harcama'){
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:o.cat,accId:'',desc:(o.desc||'')+((+o.taksit||1)>1?' ('+o.taksit+' taksit, kredi kartı)':' (kredi kartı)'),src:'card'}));
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:o.cat,accId:'',cardTxnId:cdid,desc:(o.desc||'')+((+o.taksit||1)>1?' ('+o.taksit+' taksit, kredi kartı)':' (kredi kartı)'),src:'card',cariId:o.cariId||''}));
   }
   save();toast(type==='harcama'?'Harcama eklendi':'Ödeme kaydedildi');go('card');
  });
@@ -1385,7 +1392,7 @@ function cardEkstre(id){
  document.getElementById('cardEkstreBox').innerHTML=
   `<div class="card"><h2>Kart Ekstresi — ${esc(c.name)}</h2>
    ${list.length?'<table><thead><tr><th>Tarih</th><th>İşlem</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+
-    list.map(t=>`<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='odeme'?'p':'n'}">${t.type==='odeme'?'Ödeme':'Harcama'}</span> ${esc(t.desc||t.cat||'')}${(+t.taksit||1)>1?' <span class="chip w">'+t.taksit+' taksit</span>':''}</td><td class="num" style="color:${t.type==='odeme'?'var(--pos)':'var(--neg)'}">${t.type==='odeme'?'-':''}${fmt(t.amount)}</td>
+    list.map(t=>`<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='odeme'?'p':'n'}">${t.type==='odeme'?'Ödeme':'Harcama'}</span> ${esc(t.desc||t.cat||'')}${(+t.taksit||1)>1?' <span class="chip w">'+t.taksit+' taksit</span>':''}${t.cariId?' <span class="chip g">👥 '+esc((S.cari.find(x=>x.id===t.cariId)||{}).name||'')+'</span>':''}</td><td class="num" style="color:${t.type==='odeme'?'var(--pos)':'var(--neg)'}">${t.type==='odeme'?'-':''}${fmt(t.amount)}</td>
     <td class="rowact"><button data-act="del" data-arg="cardT~${t.id}">🗑</button></td></tr>`).join('')+'</tbody></table>'
     :'<div class="empty">Bu kartta hareket yok.</div>'}</div>`;
  try{document.getElementById('cardEkstreBox').scrollIntoView({behavior:'smooth'});}catch(e){}
@@ -1413,6 +1420,7 @@ function rCari(){
  const TT={musteri:'Müşteri',tedarikci:'Tedarikçi',her2:'Müşteri+Tedarikçi',diger:'Diğer'};
  document.getElementById('main').innerHTML= topbar('Cari Hesaplar',
   `<button class="btn" data-act="cariForm">＋ Cari Ekle</button>`)+
+ orphanCard()+
  seg([['all','Tümü',all.length],['musteri','Müşteriler',all.filter(isM).length],['tedarikci','Tedarikçiler',all.filter(isT).length],['diger','Diğer',all.filter(c=>c.type==='diger').length]],cariTab,'setCariTab')+
  `<div class="grid g3" style="margin-bottom:16px">
   <div class="kpi p"><div class="l">Toplam Alacağımız</div><div class="v">${fmt0(alacak)}</div></div>
@@ -1472,31 +1480,39 @@ function cariForm(id){
   {name:'note',label:'Not',type:'textarea'}
  ],o=>{ if(id)Object.assign(init,o); else S.cari.push({id:nid(),co:CO,...o}); save();toast('Cari kaydedildi');go('cari'); },init||{});
 }
-function cariTxnForm(cariId,defType){
+function cariTxnForm(cariId,defType,init){
  const c=S.cari.find(x=>x.id===cariId)||{};
  openForm('Cari Hareket — '+(c.name||''),[
   {name:'type',label:'İşlem',type:'select',opts:[['borc','Borçlandır (satış yaptık / alacağımız arttı)'],['alacak','Alacaklandır (tahsilat / borcumuz arttı)']],req:1,def:defType||'borc'},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'nakit',label:'Nakit Hareketi (para gerçekten hesaba girdi/çıktıysa)',type:'select',opts:[['','Yok — sadece cari kaydı (veresiye)'],['gelir','💰 Bu hesaba PARA GİRİŞİ oldu (tahsilat)'],['gider','💸 Bu hesaptan PARA ÇIKIŞI oldu (ödeme)']],def:''},
-  {name:'accId',label:'Hangi hesap (nakit hareketi seçtiyseniz)',type:'select',opts:accOpts(CO,1)},
+  {name:'method',label:'Yöntem (nakit hareketi seçtiyseniz): kasa / banka / 💳 kredi kartı',type:'select',opts:payMethodOpts(CO)},
   {name:'vade',label:'Vade tarihi (hatırlatma için)',type:'date',def:c.vadeGun?addDays(todayISO(),+c.vadeGun):''},
   {name:'desc',label:'Açıklama',ph:'Fatura no, işlem detayı...'}
  ],o=>{
-  S.cariTxns.push(stampCreate({id:nid(),co:CO,cariId,...o,amount:+o.amount}));
+  var method=o.method||''; var isCard=method.indexOf('card:')===0; var cardId=isCard?method.slice(5):''; var bankAccId=isCard?'':method;
+  if(o.nakit&&!method){ toast('⚠ "Nakit Hareketi" seçtiniz ama yöntem seçmediniz — parayı hangi kasa/banka veya kredi kartıyla işlediğinizi seçin; gerçek para hareketi yoksa "Yok — sadece cari kaydı (veresiye)" seçeneğini işaretleyin.'); cariTxnForm(cariId,o.type,o); return; }
+  if(isCard&&o.nakit!=='gider'){ toast('💳 Kredi kartı yalnızca ödeme (para çıkışı) için seçilebilir; tahsilat için kasa/banka seçin.'); cariTxnForm(cariId,o.type,o); return; }
+  var ctid=nid();
+  S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:cariId,type:o.type,amount:+o.amount,date:o.date,vade:o.vade,desc:o.desc,nakit:o.nakit||'',accId:bankAccId||'',cardId:cardId||''}));
   let nakitMsg='';
-  if(o.nakit&&o.accId){ // v28: cari harekete ek olarak, gerçek hesaba işleyen bağlantılı bir gelir/gider kaydı da oluşturur
-   S.txns.push(stampCreate({id:nid(),co:CO,type:o.nakit,date:o.date,amount:+o.amount,accId:o.accId,
+  if(o.nakit&&bankAccId){
+   S.txns.push(stampCreate({id:nid(),co:CO,type:o.nakit,date:o.date,amount:+o.amount,accId:bankAccId,cariId:cariId,cariTxnId:ctid,
     cat:o.nakit==='gelir'?'Diğer Gelir':'Diğer Gider',
     desc:(o.nakit==='gelir'?'Cari tahsilat: ':'Cari ödeme: ')+(c.name||'')+(o.desc?' - '+o.desc:'')}));
    nakitMsg=' + nakit hareketi işlendi';
-  }else if(o.nakit&&!o.accId){
-   nakitMsg=' (⚠ hesap seçilmediği için nakit tarafı işlenmedi — yalnızca cari kaydedildi)';
+  }else if(o.nakit&&isCard){
+   var cdid=nid();
+   S.cardTxns.push(stampCreate({id:cdid,co:CO,cardId:cardId,type:'harcama',amount:+o.amount,date:o.date,cat:'Cari Ödeme',taksit:1,cariId:cariId,cariTxnId:ctid,desc:'Cari ödemesi: '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,accId:'',src:'card',cariId:cariId,cariTxnId:ctid,cardTxnId:cdid,cat:'Cari Ödeme',
+    desc:'Cari ödemesi (kredi kartı): '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
+   nakitMsg=' + kredi kartına işlendi (kart borcu arttı)';
   }
   const bal=cariBalance(S.cari.find(x=>x.id===cariId));
   if(c.riskLimit&&bal>+c.riskLimit)toast('⚠ Risk limiti aşıldı! Bakiye: '+fmt(bal));
   else toast('Hareket kaydedildi'+nakitMsg);
   save();go('cari');
- });
+ },init||{});
 }
 /* v27: FATURALAŞTIR — cari hareketin ÜZERİNE, resmi fatura bilgilerini (no, KDV) ekleyen özel bir giriş yolu.
    Bakiye hesaplaması hâlâ AYNI test edilmiş cariTxns/cariBalance mekanizmasını kullanır — buraya dokunulmadı,
@@ -1525,7 +1541,8 @@ function cariEkstre(id){
  const rows=list.map(t=>{const d=t.type==='borc'?+t.amount:-t.amount;run+=d;
   const vatTag=(t.fatura&&t.vat)?` <span class="tiny">(KDV %${esc(t.vat)}, tutarı: ${fmt(+t.amount*t.vat/(100+ +t.vat))})</span>`:'';
   const acc=t.nakit&&t.accId?S.accounts.find(x=>x.id===t.accId):null;
-  const nakitTag=acc?` <span class="chip p">${t.nakit==='gelir'?'💰':'💸'} ${esc(acc.name)}</span>`:'';
+  const card=t.nakit&&t.cardId?S.cards.find(x=>x.id===t.cardId):null;
+  const nakitTag=acc?` <span class="chip p">${t.nakit==='gelir'?'💰 Nakit tahsilat':'💸 Nakit ödeme'} · ${esc(acc.name)}</span>`:card?` <span class="chip p">💳 Kart ödemesi · ${esc(card.name)}</span>`:(t.nakit?` <button class="btn sm dng" data-act="fixOrphanTxn" data-arg="${t.id}">⚠ Düzelt (hesap seçilmemiş)</button>`:` <span class="chip w">📝 Veresiye</span>`);
   return `<tr><td>${dTR(t.date)}</td><td>${t.fatura?`<span class="chip g">🧾 ${esc(t.faturaNo||'Fatura')}</span> `:''}${esc(t.desc||'')}${vatTag}${nakitTag} ${t.vade?'<div class="tiny">Vade: '+dTR(t.vade)+'</div>':''}</td>
   <td class="num">${t.type==='borc'?fmt(t.amount):''}</td><td class="num">${t.type==='alacak'?fmt(t.amount):''}</td>
   <td class="num" style="font-weight:600">${fmt(run)}</td>
@@ -1618,21 +1635,23 @@ function staffForm(id){
   {name:'note',label:'Not',type:'textarea'}
  ],o=>{ if(id)Object.assign(init,o); else S.staff.push({id:nid(),co:CO,active:'1',...o}); save();toast('Personel kaydedildi');go('staff'); },init||{});
 }
-function staffPayForm(staffId){
+function staffPayForm(staffId,init){
  const st=S.staff.find(x=>x.id===staffId)||{};
  openForm('Ödeme — '+(st.name||''),[
   {name:'type',label:'İşlem türü',type:'select',opts:[['maas','Maaş ödemesi'],['avans','Avans'],['prim','Prim / ikramiye'],['kesinti','Kesinti']],req:1},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01,def:st.salary||''},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'period',label:'Dönem',type:'month',def:monthISO()},
-  {name:'accId',label:'Hangi hesaptan (maaş/avans için)',type:'select',opts:accOpts(CO,1)},
+  {name:'accId',label:'Hangi hesaptan (maaş/avans/prim için zorunlu)',type:'select',opts:accOpts(CO,1)},
   {name:'desc',label:'Açıklama'}
  ],o=>{
-  S.staffTxns.push(stampCreate({id:nid(),co:CO,staffId,...o,amount:+o.amount}));
-  if((o.type==='maas'||o.type==='avans')&&o.accId){
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:'Personel',accId:o.accId,desc:(o.type==='maas'?'Maaş: ':'Avans: ')+(st.name||'')+' ('+(o.period||'')+')'}));
+  if((o.type==='maas'||o.type==='avans'||o.type==='prim')&&!o.accId){ toast('⚠ Maaş/avans/prim ödemesi için paranın çıkacağı hesabı seçin (Banka & Kasa). Nakit çıkışı olmadan ödeme işlenemez.'); staffPayForm(staffId,o); return; }
+  var stid=nid();
+  S.staffTxns.push(stampCreate({id:stid,co:CO,staffId,...o,amount:+o.amount}));
+  if((o.type==='maas'||o.type==='avans'||o.type==='prim')&&o.accId){
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:'Personel',accId:o.accId,staffTxnId:stid,desc:(o.type==='maas'?'Maaş: ':o.type==='avans'?'Avans: ':'Prim: ')+(st.name||'')+' ('+(o.period||'')+')'}));
   }
   save();toast('Kayıt eklendi');go('staff');
- });
+ },init||{});
 }
 function leaveForm(staffId){
  const stf=byCo(S.staff,CO).filter(s=>s.active!=='0');
@@ -2473,7 +2492,7 @@ function cekKapat(id){
   {name:'date',label:'İşlem tarihi',type:'date',def:todayISO(),req:1}
  ],o=>{
   c.durum='kapandi';
-  S.txns.push({id:nid(),co:CO,type:c.tip==='alinan'?'gelir':'gider',date:o.date,amount:+c.tutar,
+  S.txns.push({id:nid(),co:CO,type:c.tip==='alinan'?'gelir':'gider',date:o.date,amount:+c.tutar,cekId:id,
    cat:c.tip==='alinan'?'Diğer Gelir':'Diğer Gider',accId:o.accId,
    desc:(c.tur==='senet'?'Senet':'Çek')+(c.tip==='alinan'?' tahsilatı: ':' ödemesi: ')+c.kisi+(c.no?' ('+c.no+')':'')});
   save();toast(c.tip==='alinan'?'Çek tahsil edildi, gelir işlendi':'Çek ödendi, gider işlendi');go('cek');
@@ -3982,6 +4001,62 @@ async function supaAutoLogin(){
   return true;
  }catch(e){ return false; }
 }
+
+/* ---------- HESAPSIZ NAKİT HAREKETLERİNİ DÜZELTME (v10.5) ----------
+   Düzeltmeden önce "nakit" seçilip hesap seçilmeden girilmiş cari hareketleri
+   bulur, tek listede toplar ve tek tıkla ya bir hesaba işler ya veresiyeye çevirir. */
+function orphanCashTxns(){
+ return S.cariTxns.filter(function(t){return t.nakit&&!t.accId&&!t.cardId&&!t.deletedAt&&canAccessCo(t.co);});
+}
+function orphanCard(){
+ var orphans=orphanCashTxns();
+ if(!orphans.length)return '';
+ orphans=orphans.slice().sort(function(a,b){return a.date<b.date?1:-1;});
+ return `<div class="card" style="border:1.5px solid var(--neg);margin-bottom:16px">
+  <h2 style="color:var(--neg)">⚠ Düzeltilecek Nakit Hareketleri <span class="chip n">${orphans.length}</span></h2>
+  <p class="tiny" style="margin-bottom:10px">Bu hareketlerde "nakit giriş/çıkış" seçilmiş ama paranın hangi kasaya/bankaya girdiği/çıktığı yazılmamış — tutarlar boşta görünüyor. Her satırda <b>Düzelt</b> ile ya bir hesaba işleyin ya veresiyeye çevirin. (Cari bakiyesi değişmez, yalnızca eksik hesap tarafı tamamlanır.)</p>
+  <table><thead><tr><th>Şirket</th><th>Cari</th><th>Tarih</th><th class="num">Tutar</th><th>Tür</th><th class="rowact"></th></tr></thead><tbody>
+  ${orphans.map(function(t){var c=S.cari.find(function(x){return x.id===t.cariId;})||{};return `<tr>
+   <td>${esc(coName(t.co))}</td><td>${esc(c.name||'-')}</td><td>${dTR(t.date)}</td>
+   <td class="num">${fmt(t.amount)}</td><td>${t.nakit==='gelir'?'💰 Giriş':'💸 Çıkış'}</td>
+   <td class="rowact"><button class="btn sm" data-act="fixOrphanTxn" data-arg="${t.id}">Düzelt</button></td></tr>`;}).join('')}
+  </tbody></table></div>`;
+}
+function fixOrphanTxn(id){
+ var t=S.cariTxns.find(function(x){return x.id===id;});
+ if(!t){toast('Kayıt bulunamadı (silinmiş olabilir)');return;}
+ var c=S.cari.find(function(x){return x.id===t.cariId;})||{};
+ openForm('Düzelt — '+(c.name||'')+' · '+fmt(t.amount),[
+  {name:'durum',label:'Bu hareket gerçekte neydi?',type:'select',req:1,def:'nakit',opts:[
+   ['nakit','💰/💸 Nakit — para bir hesaba girdi/çıktı'],
+   ['veresiye','📝 Veresiye — para hareketi yoktu (sadece borç/alacak kaydı)']]},
+  {name:'accId',label:'Nakit ise: hangi kasa/banka? (para '+(t.nakit==='gelir'?'buraya girdi':'buradan çıktı')+')',type:'select',opts:accOpts(t.co,1)}
+ ],function(o){
+  if(o.durum==='veresiye'){
+   t.nakit=''; t.accId='';
+   try{stampUpdate(t,t);}catch(e){}
+   try{logAudit('Hareket veresiyeye çevrildi',(c.name||'')+' '+fmt(t.amount));}catch(e){}
+   save();toast('Veresiye olarak düzeltildi — cari bakiyesi değişmedi');go(PAGE);return;
+  }
+  if(!o.accId){toast('⚠ Nakit seçtiniz — lütfen paranın girdiği/çıktığı hesabı seçin');fixOrphanTxn(id);return;}
+  t.accId=o.accId;
+  var acc=S.accounts.find(function(x){return x.id===o.accId;})||{};
+  S.txns.push(stampCreate({id:nid(),co:t.co,type:t.nakit,date:t.date,amount:+t.amount,accId:o.accId,cariTxnId:t.id,
+   cat:t.nakit==='gelir'?'Diğer Gelir':'Diğer Gider',
+   desc:(t.nakit==='gelir'?'Cari tahsilat: ':'Cari ödeme: ')+(c.name||'')+(t.desc?' - '+t.desc:'')}));
+  try{logAudit('Hesapsız nakit hareketi düzeltildi',(c.name||'')+' → '+(acc.name||''));}catch(e){}
+  save();toast('Nakit hareketi "'+(acc.name||'hesap')+'" hesabına işlendi ✓');go(PAGE);
+ });
+}
+
+/* Cari ödeme/tahsilat yöntemi: kasa/banka hesapları + kredi kartları (v10.5) */
+function payMethodOpts(co){
+ var l=[['','— Seçin —']];
+ byCo(S.accounts,co).filter(function(a){return a.active!=='0';}).forEach(function(a){l.push([a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name]);});
+ byCo(S.cards,co).filter(function(c){return c.active!=='0';}).forEach(function(c){l.push(['card:'+c.id,'💳 '+c.name+' (kredi kartı)']);});
+ return l;
+}
+
 window.__v7=true;
 
 
