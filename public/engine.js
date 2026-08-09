@@ -2155,8 +2155,8 @@ async function aiSummary(mode){
  const data=aiDataPack(mode);
  let out='';
  try{
-  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:1000,messages:[{role:'user',
+  const r=await fetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({max_tokens:1000,messages:[{role:'user',
     content:'Sen bir Türk KOBİ finans danışmanısın. Aşağıdaki muhasebe verilerini kısa ve net Türkçe ile yorumla: 1) Genel durum (2-3 cümle) 2) Dikkat çeken 3 bulgu 3) 2 somut öneri. Rakamları ₺ formatında yaz. Başlık kullanma, madde işareti kullanabilirsin. Veri: '+JSON.stringify(data)}]})});
   const j=await r.json();
   if(j&&j.content) out=j.content.map(c=>c.text||'').join('\n').trim();
@@ -3241,8 +3241,8 @@ var AI_ON=null; /* null=denenmedi, true/false=son deneme sonucu */
 var AI_SYS='Sen LOLE Grup sirketlerinin Türkçe finans asistanısın. YALNIZCA sana verilen JSON verisine dayan; veride olmayan bilgi için "kayıtlarda göremiyorum" de, asla tahmin uydurma. Tutarları 1.250,50 TL biçiminde yaz. Kısa, net, samimi-profesyonel ol. Markdown başlığı kullanma; madde işareti (•) kullanabilirsin.';
 async function aiAsk(user,maxTok){
  try{
-  var r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:maxTok||900,system:AI_SYS,messages:[{role:'user',content:user}]})});
+  var r=await fetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({max_tokens:maxTok||900,system:AI_SYS,messages:[{role:'user',content:user}]})});
   var j=await r.json();
   var t=(j&&j.content)?j.content.map(function(c){return c.text||'';}).join('\n').trim():'';
   AI_ON=!!t;return t;
@@ -3277,7 +3277,8 @@ function rAi(){
  var grup=(CO==='grup');
  var ornek=['bugünkü ciro','bu ay net kâr','kart borçları','yaklaşan ödemeler','kritik stok','kirayı ödedik mi'];
  document.getElementById('main').innerHTML= topbar('AI Asistan',
-  '<button class="btn gh" data-act="aiChatClear">🧹 Temizle</button>')+
+  '<button class="btn ai" data-act="meclisToplanti">🏛 Yönetim Meclisi</button><button class="btn gh" data-act="aiChatClear">🧹 Temizle</button>')+
+ '<div id="meclisBox"></div>'+
  '<div class="card"><h2>✦ Soru-Cevap Ajanı <span class="tiny">verilerinize doğal dille sorun</span></h2>'+
   '<div class="aiChat" id="aiLogBox">'+renderAiLog()+'</div>'+
   '<div class="aiInRow"><input id="aiIn" placeholder="Ör: kasada ne kadar var? · Anadolu Gıda bakiyesi? · en büyük gider?" autocomplete="off"><button class="btn" data-act="aiSend">Gönder</button></div>'+
@@ -4509,6 +4510,40 @@ function showAllRems(){
  document.getElementById('modalWrap').classList.add('on');
 }
 function remGo(p){closeModal();go(p);}
+var MECLIS_UYELER=[
+ ['Mali Müşavir','muhasebe doğruluğu, KDV, kâr/zarar sağlığı, vergi/dönem riskleri'],
+ ['Nakit Akış Uzmanı','önümüzdeki 30 günün nakit dengesi, vadeler, tahsilat öncelikleri'],
+ ['Maliyet & Kârlılık Uzmanı','gider kalemleri, bütçe aşımları, marj ve tasarruf fırsatları'],
+ ['Risk Denetçisi','geciken alacaklar, kart borç yükü, tek müşteri/tedarikçiye bağımlılık, tutarsızlıklar']];
+async function meclisCagri(system,user,maxTok){
+ var r=await fetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({max_tokens:maxTok||700,system:system,messages:[{role:'user',content:user}]})});
+ var j=await r.json();
+ if(!r.ok)throw new Error((j&&j.error&&(j.error.message||j.error))||('Sunucu hatası '+r.status));
+ return (j.content&&j.content[0]&&j.content[0].text)||'';
+}
+async function meclisToplanti(){
+ if(CO==='grup'){toast('Meclis için önce bir şirket seçin');return;}
+ var box=document.getElementById('meclisBox');if(!box)return;
+ var pack=JSON.stringify(aiDataPack('full')||aiDataPack());
+ box.innerHTML='<div class="card"><h2>🏛 Yönetim Meclisi Toplanıyor…</h2><div id="meclisSteps" class="tiny"></div></div>';
+ var st=document.getElementById('meclisSteps');
+ var gorusler=[];
+ try{
+  for(var i=0;i<MECLIS_UYELER.length;i++){
+   var u=MECLIS_UYELER[i];
+   st.innerHTML+='⏳ '+u[0]+' inceliyor…<br>';
+   var g=await meclisCagri('Sen '+coName(CO)+' için çalışan bir '+u[0]+'sın. Odak alanın: '+u[1]+'. YALNIZCA verilen JSON veriye dayan; veride olmayanı uydurma. En fazla 5 madde, her madde tek cümle, rakamlı ve somut. Türkçe yaz, başlık kullanma.','Finansal veri: '+pack,600);
+   gorusler.push(u[0]+':\n'+g);
+   st.innerHTML=st.innerHTML.replace('⏳ '+u[0]+' inceliyor…','✓ '+u[0]+' görüşünü verdi');
+  }
+  st.innerHTML+='⏳ Başkan sentezliyor…<br>';
+  var rapor=await meclisCagri('Sen '+coName(CO)+' yönetim meclisinin BAŞKANISIN. 4 uzmanın görüşleri sana verildi. Görevin: mükerrerleri birleştir, önem sırasına koy ve patrona net bir yönetim raporu yaz: (1) Genel durum 2-3 cümle, (2) BU HAFTA yapılması gereken en önemli 3-5 aksiyon (rakamlı, somut), (3) izlenecek 2 risk. Türkçe, başlıksız, • maddeli, samimi-profesyonel.','UZMAN GÖRÜŞLERİ:\n'+gorusler.join('\n\n')+'\n\nVERİ ÖZETİ: '+pack,900);
+  box.innerHTML='<div class="card"><h2>🏛 Yönetim Meclisi Raporu <span class="tiny">'+dTR(todayISO())+' · 4 uzman + başkan</span></h2><div class="aiBox">'+esc(rapor)+'</div><details style="margin-top:10px"><summary class="tiny" style="cursor:pointer">Uzman görüşlerinin tamamı</summary><div class="aiBox" style="margin-top:8px">'+esc(gorusler.join('\n\n'))+'</div></details><p class="tiny" style="margin-top:8px">⚠ Bu rapor danışma amaçlıdır — kayıtlarınıza dokunmaz, kararlar sizindir.</p></div>';
+  try{logAudit('Yönetim Meclisi raporu alındı','');}catch(e){}
+ }catch(err){
+  box.innerHTML='<div class="card"><h2>🏛 Meclis toplanamadı</h2><p class="tiny" style="color:var(--neg)">'+esc(err.message)+'</p><p class="tiny">Anahtar Vercel\'e girildiyse ve yeniden yayınlandıysa tekrar deneyin.</p></div>';
+ }
+}
 window.__v7=true;
 
 
