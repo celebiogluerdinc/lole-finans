@@ -40,6 +40,6 @@ export const LOLE_SHELL = `
 <div class="bnav"><div class="in" id="bnavIn"></div></div>
 <div id="moreSheet"><div class="sheet" id="moreIn"></div></div>
 <div id="modalWrap"><div class="modal" id="modalBox"></div></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <button id="aiFab" data-act="openAiChat" title="AI Asistan (kısayol: /)">✦</button>
 `;

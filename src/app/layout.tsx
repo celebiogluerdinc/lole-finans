@@ -4,13 +4,14 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'LOLE Finans & Muhasebe',
   description: 'LOLE Grup — Finans & Muhasebe Yönetim Sistemi',
+  manifest: '/manifest.json',
+  appleWebApp: { capable: true, title: 'LOLE', statusBarStyle: 'black-translucent' },
 };
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // C6 (WCAG 1.4.4): maximumScale/userScalable kaldırıldı — kullanıcı yakınlaştırma engellenmez
   themeColor: '#0c1322',
 };
 

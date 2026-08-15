@@ -14,11 +14,40 @@ export const dynamic = 'force-dynamic';
 
 const MAIN_KEY = 'lole-finans-v1-ekip'; // uygulamanın ortak veri anahtarı (DKEY+'-ekip')
 
-export async function GET() {
+export async function GET(req: Request) {
+  // A14: Vercel Cron sırrı — CRON_SECRET tanımlıysa Bearer başlığı zorunlu (tanımlı değilse eski davranış korunur, deploy kırılmaz)
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && req.headers.get('authorization') !== `Bearer ${cronSecret}`) {
+    return new Response('unauthorized', { status: 401 });
+  }
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const resend = process.env.RESEND_API_KEY;
   const to = process.env.BACKUP_EMAIL || 'celebiogluerdinc@gmail.com';
+
+  // B4: sonuç durumunu kv_store'a yaz — Ayarlar ekranında gösterilir
+  const writeStatus = async (st: Record<string, unknown>) => {
+    if (!url || !service) return;
+    try {
+      await fetch(`${url}/rest/v1/kv_store?on_conflict=scope,key`, {
+        method: 'POST',
+        headers: {
+          apikey: service,
+          Authorization: `Bearer ${service}`,
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates',
+        },
+        body: JSON.stringify({
+          scope: 'shared',
+          key: 'lole-weekly-backup-status',
+          value: JSON.stringify(st),
+          updated_at: new Date().toISOString(),
+        }),
+      });
+    } catch {
+      /* durum yazılamazsa yedek akışını bozma */
+    }
+  };
 
   if (!url || !service || !resend) {
     return Response.json(
@@ -61,7 +90,9 @@ export async function GET() {
   });
   const mj = await mail.json().catch(() => ({}));
   if (!mail.ok) {
+    await writeStatus({ ok: false, date: today, error: 'E-posta gönderilemedi' });
     return Response.json({ ok: false, error: 'E-posta gönderilemedi', detail: mj }, { status: 502 });
   }
+  await writeStatus({ ok: true, date: today, sentTo: to, bytes: data.length });
   return Response.json({ ok: true, sentTo: to, bytes: data.length, date: today });
 }
