@@ -15,7 +15,7 @@ export const maxDuration = 60;
 const MODEL = 'claude-sonnet-4-5'; // sunucuda kilitli — body.model dikkate alınmaz
 
 const RL = new Map<string, number[]>();
-const RL_MAX = 10;
+const RL_MAX = 30; // v14-S2: "Yönetim Meclisi" tek çalıştırmada 5 ardışık çağrı yapıyor — 10 sınırı ikinci meclisi 429 ile düşürüyordu
 const RL_WIN_MS = 60_000;
 function rateLimited(ip: string): boolean {
   const now = Date.now();

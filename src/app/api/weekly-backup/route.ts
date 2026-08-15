@@ -49,7 +49,11 @@ export async function GET(req: Request) {
     }
   };
 
+  const today = new Date().toISOString().slice(0, 10);
+
   if (!url || !service || !resend) {
+    // v14-S1: eskiden sessizce dönüyordu; Ayarlar ekranı sonsuza dek "henüz hiç çalışmadı" gösteriyordu
+    await writeStatus({ ok: false, date: today, error: 'Eksik ayar: SUPABASE_SERVICE_ROLE_KEY / RESEND_API_KEY' });
     return Response.json(
       { ok: false, error: 'Eksik ayar: SUPABASE_SERVICE_ROLE_KEY ve RESEND_API_KEY ortam değişkenleri gerekli.' },
       { status: 500 }
@@ -62,16 +66,17 @@ export async function GET(req: Request) {
     { headers: { apikey: service, Authorization: `Bearer ${service}` }, cache: 'no-store' }
   );
   if (!r.ok) {
+    await writeStatus({ ok: false, date: today, error: 'Supabase okunamadı: ' + r.status }); // v14-S1
     return Response.json({ ok: false, error: 'Supabase okunamadı: ' + r.status }, { status: 502 });
   }
   const rows = (await r.json()) as Array<{ value: string }>;
   const data = rows?.[0]?.value;
   if (!data) {
+    await writeStatus({ ok: false, date: today, error: 'Yedeklenecek veri bulunamadı (kv_store boş)' }); // v14-S1
     return Response.json({ ok: false, error: 'Yedeklenecek veri bulunamadı (kv_store boş).' }, { status: 404 });
   }
 
   // 2) E-posta ile gönder (ek: tam sistem yedeği JSON)
-  const today = new Date().toISOString().slice(0, 10);
   const b64 = Buffer.from(data, 'utf8').toString('base64');
   const mail = await fetch('https://api.resend.com/emails', {
     method: 'POST',
