@@ -1231,7 +1231,7 @@ function cascadeSoftDelete(arr,matchFn){
 }
 function del(kind,id){
  const R={
-  acc:['Hesap silinsin mi? Bu hesaba bağlı '+S.txns.filter(t=>(t.accId===id||t.accId2===id)&&!t.deletedAt).length+' yaşayan işlem var. (Hareket kayıtları korunur, çöp kutusuna taşınır)',()=>{softDelete(S.accounts,id,'acc',r=>'Hesap: '+r.name);}],
+  acc:['Hesap silinsin mi? (Çöp kutusuna taşınır)',()=>{var _n=S.txns.filter(t=>(t.accId===id||t.accId2===id)&&!t.deletedAt).length;if(_n){toast('⛔ Hareketi olan hesap silinemez — "⏸ Pasife Al" kullanın');return;}softDelete(S.accounts,id,'acc',r=>'Hesap: '+r.name);}],
   tx:['İşlem silinsin mi? (Bağlı kayıtlar da birlikte silinir; taksitli kart harcamasında TÜM taksitler birlikte silinir; 30 gün içinde geri getirilebilir)',()=>{const rec=softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));if(rec){cascadeSoftDelete(S.fixedLogs,l=>l.txnId===id);if(rec.cariTxnId)cascadeSoftDelete(S.cariTxns,x=>x.id===rec.cariTxnId);if(rec.cardTxnId){cascadeSoftDelete(S.cardTxns,x=>x.id===rec.cardTxnId);cascadeSoftDelete(S.txns,t=>t.cardTxnId===rec.cardTxnId&&t.id!==id);}if(rec.staffTxnId)cascadeSoftDelete(S.staffTxns,x=>x.id===rec.staffTxnId);if(rec.cekId){var _ck=S.cheques.find(x=>x.id===rec.cekId);if(_ck&&!_ck.deletedAt)_ck.durum=_ck.prevDurum||'portfoy'; /* v14-K7: tahsildeyken kapatilan cek silinince tahsilde durumuna doner */cascadeSoftDelete(S.cariTxns,x=>x.cekId===rec.cekId);}if(rec.posEId){var _pe=S.posEntries.find(x=>x.id===rec.posEId);if(_pe&&!_pe.deletedAt){_pe.status='bekliyor';_pe.noAutoSettle=1;} /* v14-K8: autoSettlePos ayni kaydi hemen yeniden uretmesin */cascadeSoftDelete(S.txns,t=>t.posEId===rec.posEId&&t.id!==id);cascadeSoftDelete(S.cariTxns,x=>x.posEId===rec.posEId);}if(rec.stokTxnId){cascadeSoftDelete(S.stockTxns,x=>x.id===rec.stokTxnId);cascadeSoftDelete(S.cardTxns,x=>x.stokTxnId===rec.stokTxnId);cascadeSoftDelete(S.cariTxns,x=>x.stokTxnId===rec.stokTxnId);}if(rec.assetId){cascadeSoftDelete(S.cardTxns,x=>x.assetId===rec.assetId);cascadeSoftDelete(S.cariTxns,x=>x.assetId===rec.assetId);}}}],
   pos:['POS tanımı, girişleri ve bağlı gelir/komisyon/cari kayıtları silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.pos,id,'pos',r=>'POS: '+r.name);var _peids=S.posEntries.filter(t=>t.posId===id).map(t=>t.id);cascadeSoftDelete(S.posEntries,t=>t.posId===id);cascadeSoftDelete(S.txns,t=>t.posEId&&_peids.indexOf(t.posEId)>-1);cascadeSoftDelete(S.cariTxns,t=>t.posEId&&_peids.indexOf(t.posEId)>-1);}], // v14-K5: eskiden yalnız tanım siliniyor, girişler yetim kalıp KPI'ları şişiriyordu
   posE:['POS girişi silinsin mi? (Hesaba geçmişse bağlı gelir/komisyon/cari kayıtları da birlikte silinir)',()=>{softDelete(S.posEntries,id,'posE',r=>'POS girişi: '+fmt0(r.net)+' ('+r.date+')');cascadeSoftDelete(S.txns,t=>t.posEId===id);cascadeSoftDelete(S.cariTxns,t=>t.posEId===id);}],
@@ -1252,6 +1252,7 @@ function del(kind,id){
   asset:['Demirbaş silinsin mi? (Bağlı alım/satış ve cari/kart kayıtları da birlikte silinir)',()=>{softDelete(S.assets,id,'asset',r=>'Demirbaş: '+r.name);cascadeSoftDelete(S.txns,t=>t.assetId===id);cascadeSoftDelete(S.cardTxns,t=>t.assetId===id);cascadeSoftDelete(S.cariTxns,t=>t.assetId===id);}],
   budget:['Bütçe kalemi silinsin mi?',()=>{softDelete(S.budgets,id,'budget',r=>'Bütçe: '+r.cat);}]
  }[kind];
+ if(kind==='acc'){var _lt=S.txns.filter(function(t){return (t.accId===id||t.accId2===id)&&!t.deletedAt;}).length;if(_lt){toast('⛔ Bu hesapta '+_lt+' yaşayan işlem var — hesap silinirse bu işlemler sahipsiz kalır ve denetimde hata üretir. Bunun yerine hesap kartındaki "⏸ Pasife Al" düğmesini kullanın: bakiyesi ve geçmişi korunur, yalnızca yeni işlem listelerinden gizlenir.');return;}}
  if(R)askDel(R[0],R[1]);
 }
 function askDel(msg,fn){ uiConfirm(msg||'Bu kayıt silinsin mi?',()=>{fn();save();toast('Kayıt çöp kutusuna taşındı — 30 gün içinde geri getirilebilir');go(PAGE);},{danger:1,title:'Silme Onayı',yes:'Evet, Sil'}); }
@@ -2631,17 +2632,22 @@ function rTask(){
  const all=byCo(S.tasks,CO);
  const notes=byCo(S.notes,CO).sort((a,b)=>a.date<b.date?1:-1);
  const acik=all.filter(t=>t.status!=='tamam');
- const geciken=acik.filter(t=>daysDiff(t.due)<0);
- const bugun=acik.filter(t=>daysDiff(t.due)===0);
+ const devamEden=all.filter(t=>t.status==='devam');
+ const geciken=acik.filter(t=>t.due&&daysDiff(t.due)<0);
+ const bugun=acik.filter(t=>t.due&&daysDiff(t.due)===0);
+ const tarihsiz=acik.filter(t=>!t.due);
  const whoSet=[...new Set(all.map(t=>t.who).filter(Boolean))];
  let tasks= taskWho? all.filter(t=>t.who===taskWho) : all;
- if(taskDue==='gec')tasks=tasks.filter(t=>t.status!=='tamam'&&daysDiff(t.due)<0); // D2: KPI filtreleri
- else if(taskDue==='bugun')tasks=tasks.filter(t=>t.status!=='tamam'&&daysDiff(t.due)===0);
+ if(taskDue==='gec')tasks=tasks.filter(t=>t.status!=='tamam'&&t.due&&daysDiff(t.due)<0); // D2: KPI filtreleri
+ else if(taskDue==='bugun')tasks=tasks.filter(t=>t.status!=='tamam'&&t.due&&daysDiff(t.due)===0);
+ else if(taskDue==='devam')tasks=tasks.filter(t=>t.status==='devam');
+ if(taskWho==='__ben__'){var _me=taskActor().toLocaleLowerCase('tr');tasks=all.filter(function(t){return String(t.who||'').toLocaleLowerCase('tr')===_me;});}
 
  document.getElementById('main').innerHTML= topbar('Görev & Duyuru',
-  taskTab==='pano'?`<button class="btn" data-act="addTaskForm">＋ Görev Ata</button>`:`<button class="btn" data-act="noteForm">＋ Duyuru</button>`)+
- `<div class="grid g4" style="margin-bottom:16px">
+  taskTab==='pano'?`<button class="btn gh" data-act="taskTakip">📊 Takip Tablosu</button><button class="btn" data-act="addTaskForm">＋ Görev Ata</button>`:`<button class="btn" data-act="noteForm">＋ Duyuru</button>`)+
+ `<div class="grid" style="margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
    <div class="kpi" data-act="setTaskDue" data-arg="" style="cursor:pointer" title="Filtreyi kaldır, tüm görevleri göster"><div class="l">Açık Görev</div><div class="v">${acik.length}</div></div>
+   <div class="kpi" data-act="setTaskDue" data-arg="devam" style="cursor:pointer${taskDue==='devam'?';outline:2px solid var(--acc)':''};border-left:3px solid #3a6fb0" title="Yalnız devam eden görevleri göster"><div class="l">Devam Eden ↗${taskDue==='devam'?' ✓':''}</div><div class="v">${devamEden.length}</div><div class="s">${devamEden.filter(t=>t.startedBy).length} kişi başlattı</div></div>
    <div class="kpi n" data-act="setTaskDue" data-arg="gec" style="cursor:pointer${taskDue==='gec'?';outline:2px solid var(--acc)':''}" title="Yalnız geciken görevleri göster"><div class="l">Geciken ↗${taskDue==='gec'?' ✓':''}</div><div class="v">${geciken.length}</div></div>
    <div class="kpi ${bugun.length?'a':''}" data-act="setTaskDue" data-arg="bugun" style="cursor:pointer${taskDue==='bugun'?';outline:2px solid var(--acc)':''}" title="Yalnız bugün teslim görevleri göster"><div class="l">Bugün Teslim ↗${taskDue==='bugun'?' ✓':''}</div><div class="v">${bugun.length}</div></div>
    <div class="kpi p" data-act="goTaskDone" style="cursor:pointer" title="Tamamlanan kolonuna git"><div class="l">Tamamlanan ↗</div><div class="v">${all.length-acik.length}</div></div>
@@ -2651,7 +2657,7 @@ function rTask(){
    <button class="${taskTab==='duyuru'?'on':''}" data-act="setTaskTab" data-arg="duyuru">📢 Duyurular<span class="ct" style="font-size:10px;opacity:.6"> ${notes.length}</span></button>
   </div>`+
  (taskTab==='pano'
- ? `${taskDue?`<div style="margin-bottom:10px"><span class="chip w">⏳ Filtre: ${taskDue==='gec'?'Geciken görevler':'Bugün teslim'}</span> <button class="btn sm gh" data-act="setTaskDue" data-arg="${taskDue}">✕ Filtreyi kaldır</button></div>`:''}${whoSet.length?`<div class="whoChips"><button class="${taskWho===''?'on':''}" data-act="setTaskWho" data-arg="">Herkes</button>${whoSet.map(w=>`<button class="${taskWho===w?'on':''}" data-act="setTaskWho" data-arg="${esc(w)}">${esc(w)}</button>`).join('')}</div>`:''}
+ ? `${taskDue?`<div style="margin-bottom:10px"><span class="chip w">⏳ Filtre: ${taskDue==='gec'?'Geciken görevler':'Bugün teslim'}</span> <button class="btn sm gh" data-act="setTaskDue" data-arg="${taskDue}">✕ Filtreyi kaldır</button></div>`:''}${tarihsiz.length?`<div style="margin-bottom:10px"><span class="chip w">📅 ${tarihsiz.length} görevin teslim tarihi yok — sayaçlara giremez, ✎ ile tarih ekleyin</span></div>`:''}${whoSet.length?`<div class="whoChips"><button class="${taskWho===''?'on':''}" data-act="setTaskWho" data-arg="">Herkes</button><button class="${taskWho==='__ben__'?'on':''}" data-act="setTaskWho" data-arg="__ben__">👤 Bana atananlar</button>${whoSet.map(w=>`<button class="${taskWho===w?'on':''}" data-act="setTaskWho" data-arg="${esc(w)}">${esc(w)}</button>`).join('')}</div>`:''}
   <div class="kb">${KANBAN.map(([st,lbl,col])=>{
    const items=tasks.filter(t=>(t.status||'acik')===st).sort((a,b)=>a.due<b.due?-1:1);
    return `<div class="kbCol" id="kb_${st}"><h3>${lbl}<span class="ct">${items.length}</span></h3>
@@ -2663,8 +2669,9 @@ function rTask(){
       <div class="km">
        ${t.who?`<span class="avat sm" style="background:${hashColor(t.who)}">${esc(t.who.charAt(0))}</span><span class="tiny" style="font-weight:700">${esc(t.who)}</span>`:'<span class="tiny">Atanmadı</span>'}
        ${t.pri==='yuksek'?'<span class="chip n">Acil</span>':''}
-       <span class="chip ${done?'g':df<0?'n':df===0?'w':'g'}" style="margin-left:auto">${done?'✓':'📅 '+dTR(t.due)+' · '+remLbl(df)}</span>
+       <span class="chip ${done?'g':!t.due?'g':df<0?'n':df===0?'w':'g'}" style="margin-left:auto">${done?'✓':!t.due?'📅 tarihsiz':'📅 '+dTR(t.due)+' · '+remLbl(df)}</span>
       </div>
+      ${taskStampTxt(t)}
       <div class="kbAct">
        ${st==='acik'?`<button class="btn sm gh" data-act="setTaskSt" data-arg="${t.id}~devam">▶ Başlat</button><button class="btn sm" data-act="setTaskSt" data-arg="${t.id}~tamam">✓ Bitir</button>`:''}
        ${st==='devam'?`<button class="btn sm gh" data-act="setTaskSt" data-arg="${t.id}~acik">⏸ Beklet</button><button class="btn sm" data-act="setTaskSt" data-arg="${t.id}~tamam">✓ Bitir</button>`:''}
@@ -2679,7 +2686,26 @@ function rTask(){
      <button class="btn sm gh" style="margin-top:8px" data-act="del" data-arg="note~${n.id}">Sil</button></div>`).join('')
    :'<div class="empty"><b>Duyuru yok</b>Ekibinize duyuru yayınlayın.</div>'}</div>`);
 }
-function setTaskSt(id,st){const t=S.tasks.find(x=>x.id===id);if(t){t.status=st;save();toast(st==='tamam'?'Görev tamamlandı ✓':st==='devam'?'Görev başlatıldı':'Görev beklemeye alındı');rTask();}}
+function taskActor(){try{var u=userName();if(u&&u!=='Kullanıcı')return u;}catch(e){}return (SESSION&&SESSION.username)||'—';}
+function taskStampTxt(t){
+ if(!t)return '';
+ var f=function(iso){try{var d=new Date(iso);return dTR(iso.slice(0,10))+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}catch(e){return dTR(String(iso).slice(0,10));}};
+ if(t.status==='tamam'&&t.doneAt)return '<div class="tiny" style="margin-top:5px;color:var(--pos);font-weight:600">✓ '+esc(t.doneBy||'—')+' işaretledi · '+f(t.doneAt)+'</div>';
+ if(t.status==='devam'&&t.startedAt)return '<div class="tiny" style="margin-top:5px;color:#3a6fb0;font-weight:600">▶ '+esc(t.startedBy||'—')+' başlattı · '+f(t.startedAt)+'</div>';
+ if((t.status||'acik')==='acik')return '<div class="tiny" style="margin-top:5px;color:var(--ink3)">⏳ Henüz işaretlenmedi</div>';
+ return '';
+}
+function setTaskSt(id,st){
+ const t=S.tasks.find(x=>x.id===id);if(!t)return;
+ if(t.co&&typeof canAccessCo==='function'&&!canAccessCo(t.co)){toast('Bu şirkette görev güncelleme yetkiniz yok');return;}
+ var by=taskActor(),now=new Date().toISOString();
+ t.status=st;t.stBy=by;t.stAt=now;
+ if(st==='devam'){if(!t.startedAt){t.startedAt=now;t.startedBy=by;}t.doneAt='';t.doneBy='';}
+ else if(st==='tamam'){t.doneAt=now;t.doneBy=by;if(!t.startedAt){t.startedAt=now;t.startedBy=by;}}
+ else {t.doneAt='';t.doneBy='';t.startedAt='';t.startedBy='';}
+ try{logAudit('Görev durumu',(t.title||'')+' → '+({acik:'Bekliyor',devam:'Devam Ediyor',tamam:'Tamamlandı'})[st]+' ('+by+')');}catch(e){}
+ save();toast(st==='tamam'?('Görev tamamlandı ✓ — '+by+' olarak işaretlendi'):st==='devam'?('Görev başlatıldı — '+by):'Görev beklemeye alındı');rTask();
+}
 function tgTask(id){const t=S.tasks.find(x=>x.id===id);if(t){t.status=t.status==='tamam'?'acik':'tamam';save();rTask();}}
 function taskFields(init){
  const stf=byCo(S.staff,CO).filter(s=>s.active!=='0').map(s=>s.name);
@@ -5071,7 +5097,7 @@ function scrollRem(){var el=document.getElementById('remCard');if(el)try{el.scro
 function goTxToday(type){txFilter={type:type||'',cat:'',from:todayISO(),to:todayISO()};go('tx');}
 function integrityChecks(){
  var res=[];
- var A=function(title,detail,pg,items){ if(items.length) res.push({title:title,detail:detail,pg:pg,n:items.length}); };
+ var A=function(title,detail,pg,items){ if(items.length) res.push({title:title,detail:detail,pg:pg,n:items.length,items:items}); };
  var acc=function(id){ return S.accounts.find(function(a){return a.id===id&&!a.deletedAt;}); }; // A8: silinmis hesap 'var' sayilmasin
  A('Hesapsız nakit cari hareketi','Nakit seçilmiş ama kasa/banka/kart belirtilmemiş — Cari sayfasındaki "Düzeltilecekler" listesinden düzeltin.','cari', orphanCashTxns());
  A('Hesaba bağlı olmayan işlem','Gelir/gider kaydının bağlı olduğu kasa/banka bulunamadı — işlemi silip doğru hesapla yeniden girin.','tx',
@@ -5145,9 +5171,15 @@ function runIntegrity(mode){
   if(mode!=='auto')toast('✅ Denetim temiz — sorun bulunamadı');
   return;
  }
- el.innerHTML='<p class="tiny" style="color:var(--neg);margin-bottom:8px"><b>'+res.length+' tür bulgu tespit edildi</b> — her satırdaki "Git" ile ilgili ekrana gidip düzeltin.</p>'+
+ window.__integRes=res;
+ var onarSayisi=res.filter(function(r){return integrityOnarilabilir(r.title);}).length;
+ el.innerHTML='<p class="tiny" style="color:var(--neg);margin-bottom:8px"><b>'+res.length+' tür bulgu tespit edildi</b>'+(onarSayisi?' — '+onarSayisi+' tanesi tek tuşla onarılabilir (🔧).':' — her satırdaki "Git" ile ilgili ekrana gidip düzeltin.')+'</p>'+
   '<div style="overflow-x:auto"><table><thead><tr><th>Bulgu</th><th class="num">Adet</th><th class="rowact"></th></tr></thead><tbody>'+
-  res.map(function(r){return '<tr><td><b>'+esc(r.title)+'</b><div class="tiny">'+esc(r.detail)+'</div></td><td class="num"><span class="chip n">'+r.n+'</span></td><td class="rowact"><button class="btn sm gh" data-act="go" data-arg="'+r.pg+'">Git →</button></td></tr>';}).join('')+'</tbody></table></div>';
+  res.map(function(r,i){
+   var onar=integrityOnarilabilir(r.title)?'<button class="btn sm" data-act="onarIntegrity" data-arg="'+i+'" title="Eşi/üstü silinmiş bu yetim kayıtları çöp kutusuna taşır — geri alınabilir">🔧 Onar</button>':'';
+   return '<tr><td><b>'+esc(r.title)+'</b><div class="tiny">'+esc(r.detail)+'</div></td><td class="num"><span class="chip n">'+r.n+'</span></td><td class="rowact">'+onar+'<button class="btn sm gh" data-act="go" data-arg="'+r.pg+'">Git →</button></td></tr>';}).join('')+'</tbody></table></div>'+
+  '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+(onarSayisi?'<button class="btn sm" data-act="onarIntegrity" data-arg="hepsi">🔧 Onarılabilir '+onarSayisi+' bulguyu birden onar</button>':'')+'<button class="btn sm gh" data-act="integrityRapor">📋 Raporu Kopyala</button></div>'+
+  '<p class="tiny" style="margin-top:8px">🔧 Onarım yalnızca <b>eşi veya üst kaydı zaten silinmiş</b> yetim kayıtları çöp kutusuna taşır (silme kaskadının yapması gerekeni tamamlar) — 30 gün içinde geri alınabilir. Tutar/kategori gibi insan kararı gerektiren bulgularda düğme çıkmaz.</p>';
  if(mode!=='auto')toast('⚠ '+res.length+' tür bulgu bulundu — liste güncellendi');
 }
 
@@ -5378,6 +5410,105 @@ async function meclisToplanti(){
  }catch(err){
   box.innerHTML='<div class="card"><h2>🏛 Meclis toplanamadı</h2><p class="tiny" style="color:var(--neg)">'+esc(err.message)+'</p><p class="tiny">Anahtar Vercel\'e girildiyse ve yeniden yayınlandıysa tekrar deneyin.</p></div>';
  }finally{ window.__meclisBusy=0; }
+}
+/* GÖREV TAKİP TABLOSU — yönetici görünümü: tüm şirketler, kim/ne zaman işaretledi */
+function taskTakip(){
+ var cos=COMPANIES.filter(function(c){return canAccessCo(c.id);}).map(function(c){return c.id;});
+ var list=S.tasks.filter(function(t){return !t.deletedAt&&cos.indexOf(t.co)!==-1;});
+ var SD={acik:['Bekliyor','w'],devam:['Devam Ediyor','g'],tamam:['Tamamlandı','p']};
+ list.sort(function(a,b){
+  var r={acik:0,devam:1,tamam:2};
+  var d=(r[a.status||'acik']-r[b.status||'acik']); if(d)return d;
+  return String(a.due||'9999').localeCompare(String(b.due||'9999'));
+ });
+ var f=function(iso){if(!iso)return '';try{var d=new Date(iso);return dTR(String(iso).slice(0,10))+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}catch(e){return '';}};
+ var isaretli=list.filter(function(t){return t.status==='tamam';}).length;
+ var basladi=list.filter(function(t){return t.status==='devam';}).length;
+ var bekleyen=list.filter(function(t){return (t.status||'acik')==='acik';}).length;
+ var gec=list.filter(function(t){return t.status!=='tamam'&&t.due&&daysDiff(t.due)<0;}).length;
+ document.getElementById('main').innerHTML= topbar('📊 Görev Takip Tablosu',
+  '<button class="btn gh" data-act="go" data-arg="task">← Görev Panosu</button>')+
+ '<div class="grid" style="margin-bottom:16px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">'+
+  '<div class="kpi"><div class="l">Toplam Görev</div><div class="v">'+list.length+'</div><div class="s">'+cos.length+' şirket</div></div>'+
+  '<div class="kpi"><div class="l">⏳ Bekliyor</div><div class="v">'+bekleyen+'</div><div class="s">henüz işaretlenmedi</div></div>'+
+  '<div class="kpi" style="border-left:3px solid #3a6fb0"><div class="l">▶ Devam Eden</div><div class="v">'+basladi+'</div></div>'+
+  '<div class="kpi p"><div class="l">✓ Tamamlanan</div><div class="v">'+isaretli+'</div></div>'+
+  '<div class="kpi '+(gec?'n':'')+'"><div class="l">⚠ Geciken</div><div class="v">'+gec+'</div></div>'+
+ '</div>'+
+ '<div class="card"><h2>Tüm Görevler <span class="tiny">şirket · atanan · durum · kim işaretledi</span></h2>'+
+ (list.length?'<div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th>Görev</th><th>Atanan</th><th>Teslim</th><th>Durum</th><th>İşaretleyen / Zaman</th></tr></thead><tbody>'+
+  list.map(function(t){
+   var st=SD[t.status||'acik']||SD.acik;
+   var dfx=t.due?daysDiff(t.due):null;
+   var gecMi=(t.status!=='tamam'&&dfx!==null&&dfx<0);
+   var mark = t.status==='tamam' ? '<b style="color:var(--pos)">✓ '+esc(t.doneBy||'—')+'</b><div class="tiny">'+f(t.doneAt)+'</div>'
+            : t.status==='devam' ? '<b style="color:#3a6fb0">▶ '+esc(t.startedBy||'—')+'</b><div class="tiny">başladı · '+f(t.startedAt)+'</div>'
+            : '<span class="tiny" style="color:var(--ink3)">— henüz işaretlenmedi —</span>';
+   return '<tr><td class="tiny">'+esc(coName(t.co))+'</td>'+
+    '<td><b>'+esc(t.title||'')+'</b>'+(t.pri==='yuksek'?' <span class="chip n">Acil</span>':'')+(t.desc?'<div class="tiny">'+esc(t.desc)+'</div>':'')+'</td>'+
+    '<td>'+(t.who?'<span class="avat sm" style="background:'+hashColor(t.who)+'">'+esc(String(t.who).charAt(0))+'</span> '+esc(t.who):'<span class="tiny">Atanmadı</span>')+'</td>'+
+    '<td class="tiny">'+(t.due?dTR(t.due)+(gecMi?' <span class="chip n">'+remLbl(dfx)+'</span>':''):'<span class="nil">tarihsiz</span>')+'</td>'+
+    '<td><span class="chip '+st[1]+'">'+st[0]+'</span></td>'+
+    '<td>'+mark+'</td></tr>';
+  }).join('')+'</tbody></table></div>'
+  :'<div class="empty"><b>Hiç görev yok</b>Görev Panosu ekranından ekibinize görev atayın.</div>')+
+ '<p class="tiny" style="margin-top:10px">Bu tablo erişebildiğiniz TÜM şirketlerin görevlerini birlikte gösterir; kimin işaretlediği ve ne zaman işaretlendiği kayıt altındadır.</p></div>';
+ try{window.scrollTo(0,0);}catch(e){}
+}
+/* ---- v15: TUTARLILIK DENETİMİ ONARIM ARACI ---- */
+var INTEG_ONAR={'Tek taraflı silinmiş bağlantı':1,'Çeki silinmiş işlem':1,'Çek-cari bağı kopuk':1,'Nakit üretmiş ama işlemi olmayan kayıt':1,'Stok bağı kopuk kayıt':1,'Demirbaşı silinmiş kayıt':1,'POS tanımı silinmiş giriş':1,'Tanımı silinmiş sabit ödeme kaydı':1,'Carisi silinmiş cari hareketi':1,'Kartı silinmiş kart hareketi':1,'Bağlı cari kaydı silinmiş gelir/gider':1,'Yarım silinmiş taksit grubu':1,'POS "geçti" ama gelir kaydı yok':1};
+function integrityOnarilabilir(t){return !!INTEG_ONAR[t];}
+function _integKind(rec){
+ var M=[[S.txns,'tx'],[S.cariTxns,'cariT'],[S.cardTxns,'cardT'],[S.staffTxns,'staffT'],[S.posEntries,'posE'],[S.fixedLogs,'fixedL'],[S.cheques,'cek'],[S.stockTxns,'stokT'],[S.assets,'asset'],[S.cari,'cari'],[S.cards,'card'],[S.pos,'pos']];
+ for(var i=0;i<M.length;i++){ if(M[i][0]&&M[i][0].indexOf(rec)!==-1) return {arr:M[i][0],kind:M[i][1]}; }
+ return null;
+}
+function onarIntegrity(arg){
+ if(!isSuper()){toast('Onarım yalnızca süper yöneticiye açıktır');return;}
+ var res=window.__integRes||[];
+ var hedef= (arg==='hepsi') ? res.filter(function(r){return integrityOnarilabilir(r.title);}) : [res[+arg]].filter(Boolean);
+ hedef=hedef.filter(function(r){return r&&integrityOnarilabilir(r.title);});
+ if(!hedef.length){toast('Onarılacak bulgu bulunamadı — listeyi yenileyin');return;}
+ var toplam=hedef.reduce(function(s2,r){return s2+r.items.length;},0);
+ uiConfirm(toplam+' yetim kayıt çöp kutusuna taşınacak ('+hedef.map(function(r){return r.title+': '+r.items.length;}).join(', ')+'). Bu kayıtların eşi/üst kaydı zaten silinmiş durumda; silme kaskadının yarım kalan işini tamamlıyoruz. 30 gün içinde çöp kutusundan geri alınabilir. Devam edilsin mi?',
+ function(){
+  var ok=0,pos=0;
+  hedef.forEach(function(r){
+   r.items.forEach(function(rec){
+    try{
+     if(r.title==='POS "geçti" ama gelir kaydı yok'){ rec.status='bekliyor'; pos++; ok++; return; }
+     if(rec.deletedAt)return;
+     var k=_integKind(rec); if(!k)return;
+     var lbl=(rec.title||rec.name||rec.desc||rec.kisi||('Tutar '+fmt0(rec.amount||rec.tutar||0)));
+     if(softDelete(k.arr,rec.id,k.kind,function(){return 'Onarım: '+lbl;}))ok++;
+    }catch(e){}
+   });
+  });
+  try{logAudit('Tutarlılık onarımı',ok+' yetim kayıt düzeltildi'+(pos?' ('+pos+' POS girişi bekliyora alındı)':''));}catch(e){}
+  save();
+  toast('🔧 '+ok+' kayıt onarıldı'+(pos?' · '+pos+' POS girişi "bekliyor"a alındı':'')+' — denetim yenileniyor');
+  setTimeout(function(){runIntegrity();},400);
+ },{title:'🔧 Tutarlılık Onarımı',yes:'Evet, Onar'});
+}
+function integrityRapor(){
+ var res=window.__integRes||[];
+ var t='LOLE TUTARLILIK DENETİMİ — '+dTR(todayISO())+'\n';
+ t+='Şirket görünümü: '+(coName(CO)||'-')+' · Kullanıcı: '+((SESSION&&SESSION.username)||'-')+'\n';
+ t+='Kayıt sayıları: işlem '+S.txns.filter(function(x){return !x.deletedAt;}).length+', cari hrk '+S.cariTxns.filter(function(x){return !x.deletedAt;}).length+', kart hrk '+S.cardTxns.filter(function(x){return !x.deletedAt;}).length+', POS '+S.posEntries.filter(function(x){return !x.deletedAt;}).length+'\n\n';
+ if(!res.length){t+='SONUÇ: Sorun bulunamadı.\n';}
+ else{
+  t+=res.length+' TÜR BULGU:\n';
+  res.forEach(function(r,i){
+   t+='\n'+(i+1)+') '+r.title+' — '+r.n+' kayıt'+(integrityOnarilabilir(r.title)?' [onarılabilir]':' [elle inceleme]')+'\n   '+r.detail+'\n';
+   t+='   Örnekler: '+r.items.slice(0,3).map(function(x){return (x.date||x.vade||'')+' '+(x.title||x.name||x.desc||x.kisi||'')+' '+fmt0(x.amount||x.tutar||0);}).join(' | ')+'\n';
+  });
+ }
+ try{
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t);toast('📋 Denetim raporu panoya kopyalandı — Claude\'a yapıştırıp gönderebilirsiniz');}
+  else{var ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('📋 Rapor panoya kopyalandı');}
+ }catch(e){
+  try{var bl=new Blob([t],{type:'text/plain;charset=utf-8'});var a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download='lole-denetim-'+todayISO()+'.txt';document.body.appendChild(a);a.click();a.remove();toast('📋 Rapor dosya olarak indirildi');}catch(e2){toast('Rapor oluşturulamadı');}
+ }
 }
 window.__v7=true;
 
