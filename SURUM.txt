@@ -1,6 +1,29 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v41  (05.09.2026)  MASTER DENETIM - 16 duzeltme
+     Denetim kurulu: baskan + 8 denetci (4 finans, 4 yazilim) + 5 dogrulayici.
+     91 bulgu incelendi, 16 duzeltme uygulandi.
+     EN KRITIK: tutar alanina "100.000" yazilinca 100 TL kaydediliyordu (Turk
+     binlik ayiraci ondalik saniliyordu). Duzeltildi.
+     - Excel toplamlari transfer/stok satirlarini iceriyordu -> ekranla birebir oldu
+     - Kart harcamasinda cari secilince tek tarafli kayit -> cift borc gideriliyor
+     - Grup raporuna MERKEZ satiri eklendi, "Grup Ici" sutunu toplami 0 olmali
+     - Gider dagitimi kayit tarihine bakiyordu -> donem bazli oldu (mukerrer engellendi)
+     - "Duzelt" kayitlari cop kutusuna yazmadan siliyordu -> geri getirilebilir
+     - mergeStates ortak kayitlarini siliyordu (partners eksikti)
+     - Ust kayit silmelerinde ayna bozuluyordu -> icSweep eklendi
+     - Sistem carisi elle duzenlenebiliyordu -> kapatildi
+     - Onarim araci grup ici kaydi tek basina siliyor, POS onarimi parayi
+       yeniden uretiyordu -> ikisi de duzeltildi
+     - Merkez yetkisi olmayan mudur kendi ayna hatasini goremiyordu -> gorur
+     - 27. tutarlilik kontrolu: "Transfer kaydi kar/zarara girmis"
+     - Nakit projeksiyonunda merkez karti taksitleri kaciyordu
+     - Merkezden maas oderken donem alani gizliydi
+     - Merkez formunda gizlenen alanlar yine kaydediliyordu
+     - Sabit odemede 0/negatif tutar kabul ediliyordu
+     423 otomatik test gecti.
+
 v40  (05.09.2026)  Sirket icinden "MERKEZ ODER" secenegi
      Personel sirket ekranindan cikmadan odemeyi merkeze yaptirabiliyor.
      Odeme yontemi listesine "MERKEZ ODER - <hesap/kart>" secenekleri eklendi:

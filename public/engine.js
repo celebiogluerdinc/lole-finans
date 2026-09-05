@@ -437,7 +437,7 @@ var lastSavedCore=null; // B5: en son buluta yazılan içerik (meta.saved hariç
 var casRounds=0; // B1: çakışma-birleştirme tur sayacı (en fazla 3 tur, sonra kullanıcıya sorulur)
 function stateCore(){ var _sv=S.meta?S.meta.saved:null; try{ if(S.meta)S.meta.saved=''; return JSON.stringify(S); } finally { if(S.meta)S.meta.saved=_sv; } }
 /* B1: kayıt birleştirme — veri modeli append+soft-delete olduğu için id-UNION güvenlidir */
-var MERGE_ARRAYS=['accounts','txns','pos','posEntries','cards','cardTxns','cari','cariTxns','staff','staffTxns','leaves','fixed','fixedLogs','tasks','notes','cheques','stock','stockTxns','assets','budgets','users','trash'];
+var MERGE_ARRAYS=['accounts','txns','pos','posEntries','cards','cardTxns','cari','cariTxns','staff','staffTxns','leaves','fixed','fixedLogs','tasks','notes','cheques','stock','stockTxns','assets','budgets','users','trash','partners']; /* v41: 'partners' eksikti — iki kullanıcı aynı anda kaydedince ortak kayıtları siliniyordu */
 function pickRec(a,b){
  if(a.deletedAt&&!b.deletedAt)return a;
  if(b.deletedAt&&!a.deletedAt)return b;
@@ -1140,11 +1140,20 @@ function topbar(title,btnHtml){
 
 /* ---------- MODAL FORM & ONAY (tarayıcı confirm/prompt KULLANILMAZ) ---------- */
 var modalCb=null,modalFields=null;
-function parseAmt(v){ // "1.500,75" / "1500.75" / "1500,5" / "1500" hepsini kabul et
+function parseAmt(v){ // "1.500,75" / "1500.75" / "1500,5" / "1500" / "100.000" hepsini kabul et
  v=String(v==null?'':v).trim().replace(/\s|₺|TL/gi,'');
  if(v==='')return NaN;
  if(v.includes(',')&&v.includes('.')) v=v.replace(/\./g,'').replace(',','.');
  else if(v.includes(',')) v=v.replace(',','.');
+ else if(v.includes('.')){
+  /* v41 (KRİTİK DÜZELTME): Türkiye'de nokta BİNLİK ayıracıdır. Eskiden "100.000" yazan
+     kullanıcının kaydı 100 ₺ olarak saklanıyordu. Kural: noktadan sonraki TÜM gruplar tam
+     3 hane ise nokta binlik ayıracıdır ("100.000"→100000, "1.500.000"→1500000);
+     değilse ondalık noktadır ("1.5"→1.5, "1.50"→1.5, "0.75"→0.75). */
+  var _p=v.split('.');
+  var _bin=_p.length>1&&_p.slice(1).every(function(g){return /^[0-9]{3}$/.test(g);})&&/^[0-9]+$/.test(_p[0]||'0');
+  if(_bin)v=_p.join('');
+ }
  return parseFloat(v);
 }
 function openForm(title,fields,onSubmit,init){
@@ -1286,7 +1295,30 @@ function del(kind,id){
  if(_icid&&R){var _f0=R[1];R=[R[0]+' — ⚠ Bu bir GRUP İÇİ (merkez) işlemdir: HER İKİ defterdeki tüm karşı kayıtlar da birlikte silinir.',function(){_f0();icCascade(_icid);}];}
  if(R)askDel(R[0],R[1]);
 }
-function askDel(msg,fn){ uiConfirm(msg||'Bu kayıt silinsin mi?',()=>{fn();save();toast('Kayıt çöp kutusuna taşındı — 30 gün içinde geri getirilebilir');go(PAGE);},{danger:1,title:'Silme Onayı',yes:'Evet, Sil'}); }
+/* v41: HANGİ yoldan silinirse silinsin, yarım kalan grup içi (merkez) işlem bırakma.
+   del() içindeki icRecFind koruması yalnızca 5 yaprak türünü tanıyordu; kart/cari/sabit/POS gibi
+   ÜST kayıt silmelerinde merkez karşı defteri yaşamaya devam edip ayna bakiyeyi bozuyordu. */
+function icSweep(){
+ var grp={},now=new Date().toISOString(),by=SESSION?SESSION.username:'';
+ icArrays().forEach(function(arr){arr.forEach(function(r){
+  if(!r.icId)return;var g=grp[r.icId]=grp[r.icId]||{a:[],d:0};
+  if(r.deletedAt)g.d++;else g.a.push(r);});});
+ var n=0;
+ Object.keys(grp).forEach(function(k){var g=grp[k];
+  if(g.a.length&&g.d>0){g.a.forEach(function(r){r.deletedAt=now;r.deletedBy=by;n++;});}});
+ return n;
+}
+function icRestoreSweep(){ /* geri alma yönü — simetri */
+ var grp={};
+ icArrays().forEach(function(arr){arr.forEach(function(r){
+  if(!r.icId)return;var g=grp[r.icId]=grp[r.icId]||{a:0,d:[]};
+  if(r.deletedAt)g.d.push(r);else g.a++;});});
+ var n=0;
+ Object.keys(grp).forEach(function(k){var g=grp[k];
+  if(g.a>0&&g.d.length){g.d.forEach(function(r){delete r.deletedAt;delete r.deletedBy;n++;});}});
+ return n;
+}
+function askDel(msg,fn){ uiConfirm(msg||'Bu kayıt silinsin mi?',()=>{fn();try{icSweep();}catch(e){} /* v41 */ save();toast('Kayıt çöp kutusuna taşındı — 30 gün içinde geri getirilebilir');go(PAGE);},{danger:1,title:'Silme Onayı',yes:'Evet, Sil'}); }
 function restoreTrash(idxStr){
  if(!isSuper())return;
  const idx=+idxStr;
@@ -1315,6 +1347,7 @@ function restoreTrash(idxStr){
  if(entry.kind==='pos'){var _rp=[];S.posEntries.forEach(function(t){if(t.posId===entry.id&&t.deletedAt){__und(t);_rp.push(t.id);}});[S.txns,S.cariTxns].forEach(function(a2){a2.forEach(function(t){if(t.posEId&&_rp.indexOf(t.posEId)>-1)__und(t);});});} /* v14-K5 simetri */
  if(entry.kind==='fixed'){var _rf=[];S.fixedLogs.forEach(function(l){if(l.fixedId===entry.id&&l.deletedAt){__und(l);if(l.txnId)_rf.push(l.txnId);}});S.txns.forEach(function(t){if(_rf.indexOf(t.id)>-1)__und(t);});} /* v14-K6 simetri */
  if(rec.icId&&typeof icRestore==='function')icRestore(rec.icId); /* v33: grup içi işlemin tamamı birlikte geri döner */
+ try{icRestoreSweep();}catch(e){} /* v41: üst kayıt geri gelirse grup içi bacakları da geri gelsin */
  if(entry.kind==='partner'&&typeof ortakCariCascade==='function')ortakCariCascade(entry.id,true);
  S.trash=(S.trash||[]).filter((e,i)=>i!==idx);
  logAudit('Kayıt geri getirildi',entry.label||entry.kind);
@@ -1874,8 +1907,13 @@ function cardTxnForm(cardId,type){
   var cdid=nid();
   var ctid=''; // A12: kart ekranindan tedarikci secilirse cari bakiyeye de islensin
   if(type==='harcama'&&o.cariId){
+   /* v41 (ÇİFT BORÇ DÜZELTMESİ): eskiden yalnızca 'alacak' (borcumuz arttı) yazılıyordu; oysa tutar
+      aynı anda KART borcuna da biniyordu. Aynı borç hem tedarikçide hem kartta görünüp toplam borç
+      iki kat çıkıyordu. Artık fatura ('alacak') ve kartla ödeme ('borc') birlikte yazılır: tedarikçi
+      hareketi geçmişte görünür, bakiyesi doğru şekilde net 0 kalır, borç yalnızca kartta durur. */
    ctid=nid();
-   S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:o.cariId,type:'alacak',amount:+o.amount,date:o.date,cardId:cardId,cardTxnId:cdid,desc:'Kart harcaması: '+(o.desc||'')}));
+   S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:o.cariId,type:'alacak',amount:+o.amount,date:o.date,cardId:cardId,cardTxnId:cdid,desc:'Kart harcaması (fatura): '+(o.desc||'')}));
+   S.cariTxns.push(stampCreate({id:nid(),co:CO,cariId:o.cariId,type:'borc',amount:+o.amount,date:o.date,cardId:cardId,cardTxnId:cdid,desc:'Kredi kartıyla ödendi: '+(o.desc||'')}));
   }
   var _cdRec={id:cdid,co:CO,cardId,type,...o,amount:+o.amount,taksit:+o.taksit||1};
   if(ctid)_cdRec.cariTxnId=ctid;
@@ -2011,6 +2049,9 @@ function cariReactivate(id){
 }
 function cariForm(id){
  const init=id?S.cari.find(c=>c.id===id):{type:'tedarikci'};
+ if(init&&init.sys){ /* v41: merkez/ortak sistem carisinin adı ve AÇILIŞ BAKİYESİ elle değiştirilebiliyordu — ayna denklik bozuluyordu */
+  toast('⛔ Bu bir SİSTEM hesabıdır (merkez / ortak) — düzenlenemez. Bakiyesi yalnızca gerçek işlemlerle değişir.');return;
+ }
  openForm(id?'Cari Düzenle':'Yeni Cari',[
   {name:'name',label:'Unvan / Ad',req:1,ph:'Ör: Anadolu Gıda Ltd.'},
   {name:'type',label:'Cari türü',type:'select',opts:[['musteri','Müşteri'],['tedarikci','Tedarikçi'],['her2','Müşteri + Tedarikçi'],['diger','Diğer']]},
@@ -2402,7 +2443,7 @@ function payFixed(fid){
  const f=S.fixed.find(x=>x.id===fid);if(!f)return;
  if(!byCo(S.accounts,CO).length)return toast('Önce Banka & Kasa ekranından bir hesap ekleyin');
  openForm('Ödeme Yap — '+f.name,[
-  {row:[{name:'amount',label:'Ödenen tutar (₺)',type:'number',req:1,def:f.amount},{name:'paidDate',label:'Ödeme tarihi',type:'date',def:todayISO(),req:1}]},
+  {row:[{name:'amount',label:'Ödenen tutar (₺)',type:'number',req:1,min:0.01,def:f.amount},{name:'paidDate',label:'Ödeme tarihi',type:'date',def:todayISO(),req:1}]},
   {name:'method',label:'Ödeme yöntemi (kasa / banka / 💳 kredi kartı / 🏛 merkez)',type:'select',opts:payMethodOpts(CO,1),req:1},
   {name:'period',label:'Dönem',type:'month',def:monthISO(),req:1}
  ],o=>{
@@ -2583,6 +2624,15 @@ function rGrup(){
   const maasYuku=byCo(S.staff,c.id).filter(x=>x.active!=='0').reduce((s2,x)=>s2+ +(x.salary||0),0);
   return {c,s,bal,alacak,borc,kartBorc,maasYuku,mrk};
  });
+ if(typeof canAccessCo==='function'&&canAccessCo('merkez')){ /* v41: merkezin nakdi/kartı grup toplamında hiç yoktu */
+  const ms=sumRange('merkez',from,to);
+  let mbal=0;for(const a of byCo(S.accounts,'merkez'))mbal+=accBalance(a);
+  let malacak=0,mborc=0,mmrk=0;
+  for(const cr of byCo(S.cari,'merkez')){const b=cariBalance(cr);if(cr.sys){mmrk+=-b;continue;}if(b>0)malacak+=b;else mborc+=-b;}
+  let mkart=0;for(const k of byCo(S.cards,'merkez'))mkart+=Math.max(0,cardDebt(k));
+  const mmaas=byCo(S.staff,'merkez').filter(x=>x.active!=='0').reduce((s2,x)=>s2+ +(x.salary||0),0);
+  rows.push({c:{id:'merkez',name:'🏛 LOLE MERKEZ',color:'#0b5f6b'},s:ms,bal:mbal,alacak:malacak,borc:mborc,kartBorc:mkart,maasYuku:mmaas,mrk:mmrk});
+ }
  const T=k=>rows.reduce((s,r)=>s+(k==='gelir'||k==='gider'||k==='net'?r.s[k]:r[k]),0);
  // grup 6 aylık trend
  const gms=[];
@@ -2617,7 +2667,7 @@ function rGrup(){
    ${chartArea(coSeries,gms.map(m=>m.label),230)}
   </div>
   <div class="card"><h2>Şirket Karşılaştırma Tablosu</h2>
-   <div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Gelir</th><th class="num">Gider</th><th class="num">Net</th><th class="num">Nakit+Banka</th><th class="num">Cari Alacak</th><th class="num">Cari Borç</th><th class="num" title="Şirketin merkeze borcu — grup toplamında elenmiştir">🏛 Merkez Borcu</th><th class="num">Kart Borcu</th><th class="num">Personel Gideri (dönem)</th><th class="num">Personel/Ciro %</th><th class="num">Sözleşme Maaş Toplamı (statik)</th></tr></thead><tbody>
+   <div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Gelir</th><th class="num">Gider</th><th class="num">Net</th><th class="num">Nakit+Banka</th><th class="num">Cari Alacak</th><th class="num">Cari Borç</th><th class="num" title="Grup içi bakiye. Aynalar doğruysa bu sütunun TOPLAMI sıfır olmalıdır — sıfır değilse bir yerde uyuşmazlık var.">🏛 Grup İçi</th><th class="num">Kart Borcu</th><th class="num">Personel Gideri (dönem)</th><th class="num">Personel/Ciro %</th><th class="num">Sözleşme Maaş Toplamı (statik)</th></tr></thead><tbody>
    ${rows.map(r=>`<tr data-act="enterCo" data-arg="${r.c.id}" style="cursor:pointer" title="${esc(r.c.name)} şirketine gir"><td><b style="color:${r.c.color}">${r.c.name}</b></td>
     <td class="num" style="color:var(--pos)">${fmt0(r.s.gelir)}</td>
     <td class="num" style="color:var(--neg)">${fmt0(r.s.gider)}</td>
@@ -3734,21 +3784,25 @@ function coSheets(co,pre){
   cr:pre+'Cariler',ch:pre+'Cari Hareket',st:pre+'Stok',sh:pre+'Stok Hareket',bg:pre+'Bütçe',pr:pre+'Personel',db:pre+'Demirbaş'};
 
  const N_TX=txnsSorted.length;
- const txRows=[['Tarih','Tür','Kategori','Hesap','Hedef Hesap (Virman)','Açıklama','Tutar','KDV %','KDV Tutarı (Formül)','Belge No','Cari']]; // v14-X1: belge no ve cari Excel'de hiç yoktu
+ const txRows=[['Tarih','Tür','Kategori','Hesap','Hedef Hesap (Virman)','Açıklama','Tutar','KDV %','KDV Tutarı (Formül)','Belge No','Cari','Kâr/Zarara Girer']]; // v14-X1 · v41: son sütun transfer/COGS kayıtlarını toplamdan ayırır
  txnsSorted.forEach((t,idx)=>{
   const a=S.accounts.find(x=>x.id===t.accId)||{}, a2=S.accounts.find(x=>x.id===t.accId2)||{};
   const row=idx+2, vatRate=t.vat?+t.vat:'';
   const kdvF='=IF(H'+row+'="",0,G'+row+'*H'+row+'/(100+H'+row+'))';
   const kdvVal=vatRate?(+t.amount*vatRate/(100+vatRate)):0;
   txRows.push([t.date, t.type==='gelir'?'Gelir':t.type==='gider'?'Gider':'Virman', t.cat||'',
-   a.name||(t.src==='card'?'Kredi kartı':''), a2.name||'', t.desc||'', n(t.amount), vatRate, FX(kdvF,kdvVal), t.doc||'', (S.cari.find(x=>x.id===t.cariId)||{}).name||'']);
+   a.name||(t.src==='card'?'Kredi kartı':t.src==='merkez'?'🏛 Merkez':t.src==='merkez-kart'?'🏛 Merkez kartı':''), a2.name||'', t.desc||'', n(t.amount), vatRate, FX(kdvF,kdvVal), t.doc||'', (S.cari.find(x=>x.id===t.cariId)||{}).name||'', (t.xfer||t.src==='stok'||t.type==='virman')?'Hayır':'Evet']);
  });
- const gelirToplam=txnsSorted.filter(t=>t.type==='gelir').reduce((s,t)=>s+n(t.amount),0);
- const giderToplam=txnsSorted.filter(t=>t.type==='gider').reduce((s,t)=>s+n(t.amount),0);
+ /* v41: eskiden bu toplamlar transfer (xfer) ve stok maliyeti (COGS) satırlarını da içeriyordu;
+    Excel'deki "Toplam Gelir/Gider" ile uygulamadaki rakam tutmuyordu. Artık ekranla birebir aynı. */
+ const _kz=t=>!(t.xfer||t.src==='stok'||t.type==='virman');
+ const gelirToplam=txnsSorted.filter(t=>t.type==='gelir'&&_kz(t)).reduce((s,t)=>s+n(t.amount),0);
+ const giderToplam=txnsSorted.filter(t=>t.type==='gider'&&_kz(t)).reduce((s,t)=>s+n(t.amount),0);
  txRows.push([]);
  const TOPGELIR_ROW=N_TX+3, TOPGIDER_ROW=N_TX+4, NET_ROW=N_TX+5;
- txRows.push(['Toplam Gelir', FX(N_TX?'=SUMIF('+xlRange('B',2,N_TX)+','+xlStr('Gelir')+','+xlRange('G',2,N_TX)+')':'=0', gelirToplam)]);
- txRows.push(['Toplam Gider', FX(N_TX?'=SUMIF('+xlRange('B',2,N_TX)+','+xlStr('Gider')+','+xlRange('G',2,N_TX)+')':'=0', giderToplam)]);
+ const _kzF=(tur)=>'=SUMIFS('+xlRange('G',2,N_TX)+','+xlRange('B',2,N_TX)+','+xlStr(tur)+','+xlRange('L',2,N_TX)+','+xlStr('Evet')+')';
+ txRows.push(['Toplam Gelir (kâr/zarara giren)', FX(N_TX?_kzF('Gelir'):'=0', gelirToplam)]);
+ txRows.push(['Toplam Gider (kâr/zarara giren)', FX(N_TX?_kzF('Gider'):'=0', giderToplam)]);
  txRows.push(['Net', FX('=B'+TOPGELIR_ROW+'-B'+TOPGIDER_ROW, gelirToplam-giderToplam)]);
  sheets.push(xSheet(NM.tx, txRows));
 
@@ -3774,8 +3828,9 @@ function coSheets(co,pre){
  const aylikRows=[['Ay','Gelir (Formül)','Gider (Formül)','Net (Formül)']];
  monthList.forEach((p,idx)=>{
   const row=idx+2, mStart=p+'-01', mEnd=monthEndOf(p);
-  const gF='=SUMIFS('+qref(NM.tx)+xlRange('G',2,N_TX)+','+qref(NM.tx)+xlRange('B',2,N_TX)+','+xlStr('Gelir')+','+qref(NM.tx)+xlRange('A',2,N_TX)+','+xlStr('>='+mStart)+','+qref(NM.tx)+xlRange('A',2,N_TX)+','+xlStr('<='+mEnd)+')';
-  const xF='=SUMIFS('+qref(NM.tx)+xlRange('G',2,N_TX)+','+qref(NM.tx)+xlRange('B',2,N_TX)+','+xlStr('Gider')+','+qref(NM.tx)+xlRange('A',2,N_TX)+','+xlStr('>='+mStart)+','+qref(NM.tx)+xlRange('A',2,N_TX)+','+xlStr('<='+mEnd)+')';
+  const _mf=(tur)=>'=SUMIFS('+qref(NM.tx)+xlRange('G',2,N_TX)+','+qref(NM.tx)+xlRange('B',2,N_TX)+','+xlStr(tur)+','+qref(NM.tx)+xlRange('L',2,N_TX)+','+xlStr('Evet')+','+qref(NM.tx)+xlRange('A',2,N_TX)+','+xlStr('>='+mStart)+','+qref(NM.tx)+xlRange('A',2,N_TX)+','+xlStr('<='+mEnd)+')'; /* v41: transfer/COGS hariç */
+  const gF=_mf('Gelir');
+  const xF=_mf('Gider');
   const s=sumRange(co,mStart,mEnd);
   aylikRows.push([mTR(p), FX(gF,s.gelir), FX(xF,s.gider), FX('=B'+row+'-C'+row,s.gelir-s.gider)]);
  });
@@ -3931,7 +3986,7 @@ function coSheets(co,pre){
   ['Demirbaş Değeri', FX(ass.length?'='+qref(NM.db)+'E'+DEMIRBAS_TOTAL_ROW:'=0', demirbasToplam)],
   ['Net KDV (Ödenecek/Devreden)', FX("='"+sheetNm(pre+'KDV')+"'!B5", kdvAll.tahsil-kdvAll.odenen)],
   [],['GİDER KIRILIMI (tüm zamanlar — formül)'],
-  ...gK.map(([c,v])=>[c, FX(N_TX?'=SUMIF('+qref(NM.tx)+xlRange('C',2,N_TX)+','+xlStr(c)+','+qref(NM.tx)+xlRange('G',2,N_TX)+')':'=0', v)]),
+  ...gK.map(([c,v])=>[c, FX(N_TX?'=SUMIFS('+qref(NM.tx)+xlRange('G',2,N_TX)+','+qref(NM.tx)+xlRange('C',2,N_TX)+','+xlStr(c)+','+qref(NM.tx)+xlRange('L',2,N_TX)+','+xlStr('Evet')+')':'=0', v)]), /* v41: transfer/COGS hariç */
   [],['GELİR KIRILIMI (tüm zamanlar — formül)'],
   ...gG.map(([c,v])=>[c, FX(N_TX?'=SUMIF('+qref(NM.tx)+xlRange('C',2,N_TX)+','+xlStr(c)+','+qref(NM.tx)+xlRange('G',2,N_TX)+')':'=0', v)]),
  ];
@@ -4369,7 +4424,7 @@ function cashForecast(co,days){
   var debt=cardDebt(c);
   if(debt<=0)return;
   var myCt={};S.cardTxns.forEach(function(k){if(k.cardId===c.id&&!k.deletedAt)myCt[k.id]=1;});
-  var future=S.txns.filter(function(t){return t.co===co&&!t.deletedAt&&t.src==='card'&&t.taksitNo&&t.date>start&&t.cardTxnId&&myCt[t.cardTxnId];});
+  var future=S.txns.filter(function(t){return !t.deletedAt&&(t.src==='card'||t.src==='merkez-kart')&&t.taksitNo&&t.date>start&&t.cardTxnId&&myCt[t.cardTxnId];}); /* v41: merkez kartıyla açılan taksitler şirket defterinde durduğu için merkezin projeksiyonundan düşüyordu — kart borcunun tamamı bu ayın ödeme gününe biniyordu */
   var futSum=future.reduce(function(s,t){return s+ +t.amount;},0);
   var nowDue=Math.max(0,debt-futSum); // negatifse 0
   if(nowDue>0)put(nextDue(+c.dueDay),0,nowDue,'Kredi kartı: '+c.name);
@@ -5613,11 +5668,13 @@ function onarIntegrity(arg){
   hedef.forEach(function(r){
    r.items.forEach(function(rec){
     try{
-     if(r.title==='POS "geçti" ama gelir kaydı yok'){ rec.status='bekliyor'; pos++; ok++; return; }
+     if(r.title==='POS "geçti" ama gelir kaydı yok'){ rec.status='bekliyor'; rec.noAutoSettle=1; pos++; ok++; return; } /* v41: bayrak konmazsa autoSettlePos aynı geliri yeniden üretip parayı çoğaltıyordu */
      if(rec.deletedAt)return;
      var k=_integKind(rec); if(!k)return;
      var lbl=(rec.title||rec.name||rec.desc||rec.kisi||('Tutar '+fmt0(rec.amount||rec.tutar||0)));
-     if(softDelete(k.arr,rec.id,k.kind,function(){return 'Onarım: '+lbl;}))ok++;
+     if(softDelete(k.arr,rec.id,k.kind,function(){return 'Onarım: '+lbl;})){ ok++;
+      if(rec.icId&&typeof icCascade==='function')icCascade(rec.icId); /* v41: grup içi kaydın diğer defterdeki bacakları da gitsin, ayna bozulmasın */
+     }
     }catch(e){}
    });
   });
@@ -5956,7 +6013,7 @@ function merkezOdeForm(coId,init){
    {name:'stype',label:'Personel ödeme türü',type:'select',opts:[['maas','Maaş'],['avans','Avans'],['prim','Prim']],def:'maas'}]},
   {row:[
    {name:'fixedId',label:'Sabit ödeme tanımı (yalnızca “Sabit ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(fixs.map(function(f){return [f.id,(FTYPE[f.type]||'')+' · '+f.name];}))},
-   {name:'period',label:'Sabit ödeme dönemi',type:'month',def:monthISO()}]},
+   {name:'period',label:'Dönem (sabit ödeme / maaş için)',type:'month',def:monthISO()}]},
   {name:'hedefCard',label:coName(coId)+' — borcu ödenecek kredi kartı',type:'select',opts:[['','— Seçin —']].concat(hedefCards.map(function(c){return [c.id,'💳 '+c.name+' (borç: '+fmt0(Math.max(0,cardDebt(c)))+')'];}))},
   {name:'hedefAcc',label:coName(coId)+' — para hangi kasaya / bankaya girecek?',type:'select',opts:[['','— Seçin —']].concat(hedefAccs.map(function(a){return [a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' (bakiye: '+fmt0(accBalance(a))+')'];}))},
   {name:'desc',label:'Açıklama',ph:'Fatura no / ödeme detayı...'}
@@ -5977,6 +6034,16 @@ function merkezOdeForm(coId,init){
     toast('⚠ '+mTR(o.period)+' dönemi için bu tanıma ait ödeme kaydı zaten var — mükerrer kayıt engellendi.');return;
    }
   }
+  /* v41: form alanları yalnızca GİZLENİYOR, değerleri temizlenmiyordu. Kullanıcı önce "cariye ödeme"
+     seçip cari seçtikten sonra "doğrudan gider"e dönerse, gizlenen cariId hâlâ dolu kalıyor ve
+     merkezKayitYaz cariye İKİNCİ kez borç yazıyordu. Hedefe uymayan alanları burada sıfırlıyoruz. */
+  if(o.hedef!=='cari')o.cariId='';
+  if(o.hedef!=='maas'){o.staffId='';}
+  if(o.hedef!=='sabit'){o.fixedId='';}
+  if(o.hedef!=='kart')o.hedefCard='';
+  if(o.hedef!=='kasa')o.hedefAcc='';
+  if(o.hedef!=='gider')o.cat='';
+  if(o.hedef!=='maas'&&o.hedef!=='sabit')o.period='';
   var isCard=String(o.method).indexOf('card:')===0;
   if((+o.taksit||1)>1&&(!isCard||o.hedef!=='gider'))toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ödemelerinde uygulanır — bu kayıt tek çekim olarak işlendi');
   var r=merkezKayitYaz(coId,o);
@@ -5993,9 +6060,11 @@ function merkezDonemGider(p){
  var r=merkezDonemAralik(p),g=0,d=0;
  S.txns.forEach(function(t){
   if(t.co!=='merkez'||t.deletedAt||t.xfer||t.type==='virman')return;
+  /* v41: dağıtılan tutar artık KAYIT TARİHİNE değil allocPeriod'a göre sayılıyor.
+     Eskiden kullanıcı "Kayıt tarihi"ni dönem dışına alırsa aynı dönem tekrar tekrar dağıtılabiliyordu. */
+  if(t.type==='gelir'&&t.src==='merkez-dagitim'){ if((t.allocPeriod||String(t.date).slice(0,7))===p)d+=+t.amount; return; }
   if(t.date<r.from||t.date>r.to)return;
   if(t.type==='gider'&&t.src!=='merkez-dagitim')g+=+t.amount;
-  else if(t.type==='gelir'&&t.src==='merkez-dagitim')d+=+t.amount;
  });
  g=Math.round(g*100)/100;d=Math.round(d*100)/100;
  return {gider:g,dagitilan:d,kalan:Math.round((g-d)*100)/100};
@@ -6354,14 +6423,20 @@ function ortakOdemeForm(pid,init){
 
 /* ================== MERKEZ TUTARLILIK DENETİMLERİ ================== */
 function merkezChecks(){
- if(!canAccessCo('merkez'))return [];
+ /* v41: eskiden merkez yetkisi olmayan kullanıcıda TÜM merkez bekçileri susuyordu; şirket müdürü
+    kendi defterindeki bozuk merkez kaydını göremiyordu. Artık yetkisi olmayan da KENDİ şirketlerinin
+    ayna/yarım-kalma bulgularını görür, yalnızca ortak (sermaye) denetimi gizli kalır. */
+ var _mrk=canAccessCo('merkez');
  var out=[],A=function(title,detail,pg,items){if(items.length)out.push({title:title,detail:detail,pg:pg,n:items.length,items:items});};
  /* 1) Yarım kalmış merkez işlemi */
  var grp={};
- [S.txns,S.cariTxns,S.cardTxns,S.staffTxns].forEach(function(arr){arr.forEach(function(r){
-  if(!r.icId)return;var g=grp[r.icId]=grp[r.icId]||{a:[],d:0};if(r.deletedAt)g.d++;else g.a.push(r);});});
+ var _gorulur=function(r){ return _mrk ? true : (r.co!=='merkez'&&canAccessCo(r.co)); }; /* v41 */
+ [S.txns,S.cariTxns,S.cardTxns,S.staffTxns,S.fixedLogs].forEach(function(arr){arr.forEach(function(r){
+  if(!r.icId)return;var g=grp[r.icId]=grp[r.icId]||{a:[],d:0,gor:false};
+  if(_gorulur(r))g.gor=true;
+  if(r.deletedAt)g.d++;else g.a.push(r);});});
  var yarim=[];
- Object.keys(grp).forEach(function(k){var g=grp[k];if(g.a.length&&g.d>0)yarim=yarim.concat(g.a);}); /* yaşayan VE silinmiş kayıt bir arada → grup yarım kalmış */
+ Object.keys(grp).forEach(function(k){var g=grp[k];if(g.gor&&g.a.length&&g.d>0)yarim=yarim.concat(g.a.filter(_gorulur));}); /* yaşayan VE silinmiş kayıt bir arada → grup yarım kalmış */
  A('Yarım kalmış merkez işlemi','Bir grup içi işlemin kayıtlarından bazıları silinmiş, bazıları duruyor — iki defter arasındaki denge bozulur. 🔧 ile kalan kayıtlar çöp kutusuna taşınır.','merkez',yarim);
  /* 2) Ayna bakiye uyuşmazlığı */
  var ayna=[];
@@ -6381,8 +6456,14 @@ function merkezChecks(){
  /* 4) Grup içi kayıt eleme bayrağı eksik */
  var icBad=S.cariTxns.filter(function(t){
   if(t.deletedAt||!t.cariId)return false;
+  if(!canAccessCo(t.co))return false; /* v41: yetki kapsamı */
   var c=S.cari.find(function(x){return x.id===t.cariId;});
   return c&&c.sys&&String(c.sys).indexOf('ortak:')!==0&&!t.ic;});
+ var xferBad=S.txns.filter(function(t){
+  if(t.deletedAt||!canAccessCo(t.co))return false;
+  if(t.xfer||t.type==='virman')return false;
+  return t.cat==='Grup İçi'||t.cat==='Ortak / Sermaye';});
+ A('Transfer kaydı kâr/zarara girmiş','“Grup İçi” veya “Ortak / Sermaye” kategorisindeki bir kayıt transfer olarak işaretlenmemiş — kâr/zarar tablosunda olmayan bir gelir ya da gider olarak görünür.','tx',xferBad);
  A('Grup içi işaret eksik kayıt','Merkez hesabına ait bir hareket “grup içi” olarak işaretlenmemiş — grup raporunda çifte sayılabilir.','merkez',icBad);
  return out;
 }
@@ -6438,7 +6519,7 @@ function merkezOdeBind(coId){
   fldShow('cat',hedef==='gider');
   fldShow('cariId',hedef==='cari');
   fldShow('staffId',hedef==='maas');fldShow('stype',hedef==='maas');
-  fldShow('fixedId',hedef==='sabit');fldShow('period',hedef==='sabit');
+  fldShow('fixedId',hedef==='sabit');fldShow('period',hedef==='sabit'||hedef==='maas'); /* v41: maaş dönemi de seçilebilmeli */
   fldShow('hedefCard',hedef==='kart');
   fldShow('hedefAcc',hedef==='kasa');
   fldShow('taksit',hedef==='gider'&&isCard);
@@ -6587,8 +6668,12 @@ function merkezDuzelt(icId){
  if(!coId){toast('Bu işlem şirket hesabına bağlı değil — düzeltmek için silip yeniden girin');return;}
  if(merkezYetkiUyari(coId))return;
  var mo=mct.mo||{};
- uiConfirm('Bu işlemin HER İKİ defterdeki tüm kayıtları silinecek ve bilgileri dolu olarak yeni bir form açılacak. Düzeltip kaydettiğinizde işlem yeniden oluşur. Devam edilsin mi?',
+ uiConfirm('Bu işlemin HER İKİ defterdeki tüm kayıtları silinip bilgileri dolu bir form açılacak. Düzeltip kaydettiğinizde işlem yeniden oluşur.\n\nFormu kaydetmeden kapatırsanız kayıt SİLİNMİŞ kalır — ama çöp kutusuna gider, Ayarlar > Silinenler bölümünden geri getirebilirsiniz.\n\nDevam edilsin mi?',
  function(){
+  /* v41: eskiden icCascade doğrudan deletedAt damgalıyordu ve çöp kutusuna HİÇ kayıt yazmıyordu;
+     kullanıcı formu kaydetmeden kapatırsa para geri getirilemeden yok oluyordu. Artık ana kayıt
+     softDelete ile çöpe gider (restoreTrash zaten rec.icId'yi görüp grubun tamamını geri getirir). */
+  softDelete(S.cariTxns,mct.id,'cariT',function(r){return 'Merkez işlemi (düzeltme): '+coName(coId)+' '+fmt0(r.amount);});
   icCascade(icId);
   try{logAudit('Merkez işlemi düzeltiliyor',coName(coId)+' · '+fmt0(mct.amount));}catch(e){}
   save();
