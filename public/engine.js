@@ -1958,6 +1958,11 @@ function rCari(){
   <div class="card"><h2>En Yüksek Alacaklarımız</h2>${topAlacak.length?chartHBars(topAlacak.map(r=>({label:r.c.name,value:r.b,color:'var(--pos)',act:'cariDetail',arg:r.c.id}))):'<div class="empty">Alacak yok</div>'}</div>
   <div class="card"><h2>En Yüksek Borçlarımız</h2>${topBorc.length?chartHBars(topBorc.map(r=>({label:r.c.name,value:-r.b,color:'var(--neg)',act:'cariDetail',arg:r.c.id}))):'<div class="empty">Borç yok</div>'}</div>
  </div>`:''}
+ ${(CO!=='merkez'&&CO!=='grup'&&!findCoMerkezCari(CO))?`<div class="card" style="margin-bottom:12px;padding:12px 14px;border-left:4px solid #0c6b58">
+  <b style="font-size:13px">🏛 Merkez Hesabı</b> <span class="chip g">Henüz hareket yok</span>
+  <div class="tiny" style="margin-top:4px">Şirket merkezinden bu şirket adına ilk ödeme yapıldığında bu listede <b>“🏛 Merkez Hesabı”</b> adında bir cari otomatik oluşur ve merkeze olan borcunuz orada izlenir. Bu hesaba elle hareket eklenemez.</div>
+  ${canAccessCo('merkez')?`<div class="cardBtns" style="margin-top:8px"><button class="btn sm gh" data-act="coJump" data-arg="merkez">🏛 Merkez Kasa ekranına git</button></div>`:''}
+ </div>`:''}
  ${cariVade!==''?`<div class="card" style="margin-bottom:12px;padding:10px 14px"><span class="chip w">⏳ Filtre: ${_vadeL[+cariVade]} gecikmiş borcu olanlar (${rowsF.length} cari)</span> <button class="btn sm gh" data-act="setCariVade" data-arg="${cariVade}">✕ Filtreyi kaldır</button></div>`:''}
  ${rowsF.length? `<div class="grid g2">`+rowsF.map(({c,b})=>{
    const col=hashColor(c.name);
@@ -6603,7 +6608,16 @@ function merkezSetupCard(){
 function merkezDashCard(co){
  if(co==='grup'||co==='merkez')return '';
  var c=findCoMerkezCari(co);
- if(!c)return '';
+ if(!c){ /* v39: henüz merkez işlemi yoksa da kart görünsün — kullanıcı hesabın var olduğunu bilsin */
+  var _y0=canAccessCo('merkez');
+  return '<div class="card" style="margin-bottom:12px;border-left:4px solid #0c6b58;opacity:.92">'+
+   '<h2>🏛 Merkez Hesabı <span class="chip g">Hareket yok</span></h2>'+
+   '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">'+
+    '<div><div class="tiny">Merkeze borcumuz</div><b style="font-size:22px;color:var(--ink2)">'+fmt0(0)+'</b><div class="tiny">merkezden bu şirkete henüz ödeme yapılmadı</div></div>'+
+    '<div style="flex:1;min-width:220px" class="tiny">Şirket merkezinden bu şirket adına bir ödeme, nakit aktarım veya kart ödemesi yapıldığında hesap burada otomatik açılır ve tüm hareketler işlenir.</div>'+
+    (_y0?'<div><button class="btn sm gh" data-act="coJump" data-arg="merkez">🏛 Merkez Kasa ekranına git</button></div>':'')+
+   '</div></div>';
+ }
  var borc=coMerkezBorc(co),ayna=merkezCoBal(co),fark=Math.abs(borc-ayna);
  var son=S.cariTxns.filter(function(t){return t.cariId===c.id&&!t.deletedAt;}).sort(function(a,b){return a.date<b.date?1:-1;}).slice(0,3);
  var yetki=canAccessCo('merkez');

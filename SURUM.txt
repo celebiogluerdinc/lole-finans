@@ -1,6 +1,12 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v39  (05.09.2026)  Merkez Hesabi karti hareket olmadan da gorunuyor
+     Onceden kart yalnizca o sirkete merkezden ILK odeme yapildiktan sonra
+     ciziliyordu; artik bos durumda da gorunup ne oldugunu acikliyor.
+     Sirket ana sayfasi ve Cari ekrani icin ayri ayri.
+     329 otomatik test gecti.
+
 v38  (05.09.2026)  Merkez borcu raporlarda ayri gosteriliyor
      - Sirket ana sayfasina 5. KPI kutusu: "Merkeze Borcumuz"
      - Cari ekraninda "Tedarikcilere Borcumuz" ve "Merkeze Borcumuz" AYRI
