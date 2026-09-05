@@ -367,3 +367,8 @@ body[data-co=merkez] .coSwitch .dot{background:#0b5f6b}
 .mNote .nvPos{color:var(--pos)}
 .mNote .nvNeg{color:var(--neg)}
 .mNote .nvMut{color:var(--ink3);font-weight:400}
+
+/* ===== v38 — 5'li KPI satırı (Merkeze Borcumuz kutusu eklenince) ===== */
+.g5{grid-template-columns:repeat(5,1fr)}
+@media(max-width:1100px){.g5{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){.g5{grid-template-columns:1fr 1fr}}

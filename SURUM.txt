@@ -1,15 +1,17 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
-v37  (05.09.2026)  Merkezden sirket kasasi ve kredi karti odemesi
-     "Sirket Adina Ode" ekranina iki hedef eklendi:
-       - Sirketin KREDI KARTI borcunun merkezden odenmesi (gider degil)
-       - Sirketin KASASINA / BANKASINA nakit aktarim (gelir degil)
-     Her ikisi de canli onizleme, uyari ve tek tusla duzeltme ile calisir.
-     281 otomatik test gecti.
+v38  (05.09.2026)  Merkez borcu raporlarda ayri gosteriliyor
+     - Sirket ana sayfasina 5. KPI kutusu: "Merkeze Borcumuz"
+     - Cari ekraninda "Tedarikcilere Borcumuz" ve "Merkeze Borcumuz" AYRI
+     - Excel disa aktarimda grup ici hesaplar ayri blokta, toplamlara girmiyor
+     - Yazdirilabilir raporda "Grup Ici Hesaplar" ayri baslik
+     - AI veri paketi ve kisa yanitlar merkez borcunu ayri raporluyor
+     - Cari risk / anomali / yaslandirma listelerinde sistem hesaplari yok
+     309 otomatik test gecti.
 
-v36  Merkez Kasa kullanim iyilestirmeleri (dinamik form, canli onizleme,
-     bagli hesap korumasi, tek tusla duzeltme, kurulum rehberi, kar payi)
+v37  Merkezden sirket kasasi ve kredi karti odemesi
+v36  Merkez Kasa kullanim iyilestirmeleri (canli onizleme, duzeltme, rehber)
 v35  Merkez Kasa ve Ortaklar icin ayri kullanici yetkileri
 v34  Taksitli merkez karti, sabit odeme, genel yonetim gideri dagitimi
 v33  Merkez Kasa ilk surum
