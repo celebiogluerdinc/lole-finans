@@ -1,15 +1,15 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
-v36  (05.09.2026)  Merkez Kasa - tam surum
-     - Merkez Kasa defteri (5. varlik), sirket adina odeme / nakit aktarim / tahsilat
-     - Ortaklar & Sermaye: sermaye ve ortak cari ayri, kar payi dagitimi
-     - Merkez kartiyla taksitli odeme, sabit odeme, genel yonetim gideri dagitimi
-     - Merkez Kasa ve Ortaklar icin ayri kullanici yetkileri
-     - Formlarda canli "kaydedince ne olacak" onizlemesi ve hata uyarilari
-     - Bagli hesaplarin elle bozulmasi engellendi, tek tusla duzeltme
-     242 otomatik test gecti.
+v37  (05.09.2026)  Merkezden sirket kasasi ve kredi karti odemesi
+     "Sirket Adina Ode" ekranina iki hedef eklendi:
+       - Sirketin KREDI KARTI borcunun merkezden odenmesi (gider degil)
+       - Sirketin KASASINA / BANKASINA nakit aktarim (gelir degil)
+     Her ikisi de canli onizleme, uyari ve tek tusla duzeltme ile calisir.
+     281 otomatik test gecti.
 
-v35  Ekip yetkileri
-v34  Taksit / sabit odeme / gider dagitimi
+v36  Merkez Kasa kullanim iyilestirmeleri (dinamik form, canli onizleme,
+     bagli hesap korumasi, tek tusla duzeltme, kurulum rehberi, kar payi)
+v35  Merkez Kasa ve Ortaklar icin ayri kullanici yetkileri
+v34  Taksitli merkez karti, sabit odeme, genel yonetim gideri dagitimi
 v33  Merkez Kasa ilk surum
