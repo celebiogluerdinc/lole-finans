@@ -16,6 +16,22 @@ const COMPANIES=[
  {id:'loleq',name:'LOLE Q',          tip:'Perakende / mağaza', color:'#4a2a6b'}
 ];
 const GRUP={id:'grup',name:'LOLE GRUP',tip:'Konsolide görünüm'};
+/* v33: ŞİRKET MERKEZİ — 4 şirketten bağımsız 5. defter. Kendi kasası/bankası/kartı ve kendi genel yönetim gideri vardır; geliri yoktur. */
+const MERKEZ={id:'merkez',name:'LOLE MERKEZ',tip:'Şirket merkezi · Merkez Kasa',color:'#0c6b58'};
+const MERKEZ_PAGES=[
+ {id:'merkez',ic:'home',t:'Merkez Kasa'},
+ {id:'ortak', ic:'users',t:'Ortaklar & Sermaye'},
+ {id:'acc',   ic:'bank',t:'Banka & Kasa'},
+ {id:'tx',    ic:'arrows',t:'Gelir - Gider'},
+ {id:'card',  ic:'card',t:'Kredi Kartları'},
+ {id:'cari',  ic:'users',t:'Cari Hesaplar'},
+ {id:'staff', ic:'badge',t:'Personel & Maaş'},
+ {id:'fixed', ic:'calendar',t:'Sabit Ödemeler'},
+ {id:'cek',   ic:'doc',t:'Çek & Senet'},
+ {id:'rep',   ic:'chart',t:'Raporlar'},
+ {id:'task',  ic:'check',t:'Görev & Duyuru'},
+ {id:'set',   ic:'gear',t:'Ayarlar'}
+];
 
 /* ---------- VERİ KATMANI ---------- */
 const DKEY='lole-finans-v1'; // ⚠️ SAKIN DEĞİŞTİRME: mevcut tüm finansal veri bu anahtar altında saklı — değişirse eski veriye erişim kaybolur (veri silinmez ama görünmez olur)
@@ -175,7 +191,7 @@ const blankState=()=>({
  accounts:[],txns:[],pos:[],posEntries:[],cards:[],cardTxns:[],
  cari:[],cariTxns:[],staff:[],staffTxns:[],leaves:[],
  fixed:[],fixedLogs:[],tasks:[],notes:[],
- cheques:[],stock:[],stockTxns:[],assets:[],budgets:[],
+ cheques:[],stock:[],stockTxns:[],assets:[],budgets:[],partners:[], /* v33: ortaklar (merkez defteri) */
  ai:{autoBrief:1},aiCache:{},user:{name:'',title:''},users:[],
  authPw:{}, // C8: ortak rol şifreleri seed'den KALDIRILDI — mevcut bulut verisindeki eski girişler geriye dönük çalışmaya devam eder
  auditLog:[], // v13: kritik olayların (giriş/çıkış, kullanıcı/kategori değişikliği, sıfırlama/geri yükleme) kaydı — kim, ne zaman, ne yaptı
@@ -667,7 +683,7 @@ const addDays=(iso,n)=>{const d=new Date(iso+'T12:00');d.setDate(d.getDate()+n);
 const clampDay=(y,m,day)=>{const last=new Date(y,m,0).getDate();return y+'-'+String(m).padStart(2,'0')+'-'+String(Math.min(day,last)).padStart(2,'0');};
 function toast(msg,type){const t=document.getElementById('toast');t.textContent=msg;t.className='toast on'+(type?' '+type:'');clearTimeout(t._x);t._x=setTimeout(()=>{t.classList.remove('on');},Math.min(7000,1800+String(msg||'').length*35));}
 const byCo=(arr,co)=>arr.filter(x=>x.co===co&&!x.deletedAt);
-const coName=id=>id==='grup'?'LOLE GRUP':(COMPANIES.find(c=>c.id===id)||{}).name||'';
+const coName=id=>id==='grup'?'LOLE GRUP':id==='merkez'?'LOLE MERKEZ':(COMPANIES.find(c=>c.id===id)||{}).name||'';
 window.addEventListener('error',e=>{try{toast('Hata: '+e.message);}catch(_){}});
 
 /* ---------- MERKEZİ OLAY SİSTEMİ ----------
@@ -1036,6 +1052,13 @@ function renderSelect(){
     <div class="nm">${c.name}</div><div class="tp">${c.tip}</div>
     <div class="bal">Nakit + Banka <b>${fmt0(bal)}</b><span class="tiny">Bugünkü ciro: ${fmt0(t.gelir)}</span></div></button>`;
  }
+ if(canAccessCo('merkez')){
+  var _mb=0;byCo(S.accounts,'merkez').forEach(function(a){_mb+=accBalance(a);});
+  var _ma=0;COMPANIES.forEach(function(c){_ma+=Math.max(0,merkezCoBal(c.id));});
+  h+=`<button class="coCard" style="--cc:#0c6b58" data-act="enterCo" data-arg="merkez">
+    <div class="nm">🏛 LOLE MERKEZ</div><div class="tp">Şirket merkezi · Merkez Kasa</div>
+    <div class="bal">Merkez Nakit + Banka <b>${fmt0(_mb)}</b><span class="tiny">Şirketlerden alacak: ${fmt0(_ma)}</span></div></button>`;
+ }
  if(canAccessCo('grup')){
   h+=`<button class="coCard grup" data-act="enterCo" data-arg="grup">
    <div class="nm">LOLE GRUP</div><div class="tp">${GRUP.tip}</div>
@@ -1073,30 +1096,35 @@ function enterCo(id){
  document.getElementById('sideCo').textContent=coName(id);
  buildNav();
  try{autoSettlePos();}catch(e){} // B2: şirkete girişte vadesi dolan POS blokajları otomatik işlenir
- go(id==='grup'?'grup':'dash');
+ go(id==='grup'?'grup':id==='merkez'?'merkez':'dash');
 }
 function buildNav(){
  const pages= CO==='grup'
    ? [{id:'grup',ic:'chart',t:'Grup Raporu'},{id:'set',ic:'gear',t:'Ayarlar'}]
-   : PAGES;
+   : (CO==='merkez'?MERKEZ_PAGES.filter(function(p){return p.id!=='ortak'||canAccessCo('ortak');}):PAGES); /* v35: ortak sayfası ayrı yetki */
  document.getElementById('sideNav').innerHTML=
   pages.map(p=>`<button data-p="${p.id}" data-act="go" data-arg="${p.id}"><span class="ic">${icHtml(p.ic)}</span>${p.t}</button>`).join('')
   +`<button data-act="globalSearch"><span class="ic">${icHtml('search')}</span>Genel Arama</button>`;
  const mainTabs= CO==='grup'
   ? [{id:'grup',ic:'chart',t:'Rapor'},{id:'set',ic:'gear',t:'Ayarlar'}]
+  : CO==='merkez'
+  ? [{id:'merkez',ic:'home',t:'Merkez'}].concat(canAccessCo('ortak')?[{id:'ortak',ic:'users',t:'Ortaklar'}]:[{id:'cari',ic:'users',t:'Cari'}]).concat([{id:'_add',ic:'+',t:''},{id:'tx',ic:'arrows',t:'İşlemler'},{id:'_more',ic:'☰',t:'Menü'}])
   : [{id:'dash',ic:'home',t:'Ana Sayfa'},{id:'tx',ic:'arrows',t:'İşlemler'},{id:'_add',ic:'+',t:''},{id:'rep',ic:'chart',t:'Raporlar'},{id:'_more',ic:'☰',t:'Menü'}];
  document.getElementById('bnavIn').innerHTML=mainTabs.map(p=>
   p.id==='_add'?`<button class="fab" data-act="quickAdd">+</button>`
   :`<button data-p="${p.id}" data-act="${p.id==='_more'?'openMore':'go'}" data-arg="${p.id==='_more'?'':p.id}"><span class="ic">${icHtml(p.ic)}</span>${p.t}</button>`).join('');
  document.getElementById('moreIn').innerHTML=
-  (CO==='grup'?[]:PAGES).map(p=>`<button data-act="moreGo" data-arg="${p.id}"><span class="ic">${icHtml(p.ic)}</span>${p.t}</button>`).join('')
+  (CO==='grup'?[]:(CO==='merkez'?MERKEZ_PAGES.filter(function(p){return p.id!=='ortak'||canAccessCo('ortak');}):PAGES)).map(p=>`<button data-act="moreGo" data-arg="${p.id}"><span class="ic">${icHtml(p.ic)}</span>${p.t}</button>`).join('')
   +`<button data-act="globalSearch"><span class="ic">${icHtml('search')}</span>Genel Arama</button><button data-act="moreGo" data-arg="_select"><span class="ic">⇄</span>Şirket Değiştir</button>`;
 }
 function openMore(){document.getElementById('moreSheet').classList.add('on');}
 function go(p){
+ if(CO==='merkez'&&(p==='dash'||p==='grup'))p='merkez';           /* v33 */
+ if(CO!=='merkez'&&(p==='merkez'||p==='ortak'))p=CO==='grup'?'grup':'dash'; /* v33: merkez sayfaları yalnızca merkez defterinde */
+ if(p==='ortak'&&!canAccessCo('ortak')){toast('👥 Ortaklar & Sermaye ekranı için ayrı yetki gerekir — Ayarlar > Kullanıcılar bölümünden verilebilir');p='merkez';} /* v35 */
  PAGE=p;
  document.querySelectorAll('[data-p]').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
- const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,task:rTask,set:rSet,grup:rGrup};
+ const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,task:rTask,set:rSet,grup:rGrup,merkez:rMerkez,ortak:rOrtak};
  (R[p]||rDash)();
  updateSaveBadge();
  try{window.scrollTo(0,0);}catch(e){}
@@ -1230,7 +1258,7 @@ function cascadeSoftDelete(arr,matchFn){
  arr.forEach(function(t){ if(matchFn(t)&&!t.deletedAt){ t.deletedAt=new Date().toISOString(); t.deletedBy=SESSION?SESSION.username:''; } });
 }
 function del(kind,id){
- const R={
+ var R={
   acc:['Hesap silinsin mi? (Çöp kutusuna taşınır)',()=>{var _n=S.txns.filter(t=>(t.accId===id||t.accId2===id)&&!t.deletedAt).length;if(_n){toast('⛔ Hareketi olan hesap silinemez — "⏸ Pasife Al" kullanın');return;}softDelete(S.accounts,id,'acc',r=>'Hesap: '+r.name);}],
   tx:['İşlem silinsin mi? (Bağlı kayıtlar da birlikte silinir; taksitli kart harcamasında TÜM taksitler birlikte silinir; 30 gün içinde geri getirilebilir)',()=>{const rec=softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));if(rec){cascadeSoftDelete(S.fixedLogs,l=>l.txnId===id);if(rec.cariTxnId)cascadeSoftDelete(S.cariTxns,x=>x.id===rec.cariTxnId);if(rec.cardTxnId){cascadeSoftDelete(S.cardTxns,x=>x.id===rec.cardTxnId);cascadeSoftDelete(S.txns,t=>t.cardTxnId===rec.cardTxnId&&t.id!==id);}if(rec.staffTxnId)cascadeSoftDelete(S.staffTxns,x=>x.id===rec.staffTxnId);if(rec.cekId){var _ck=S.cheques.find(x=>x.id===rec.cekId);if(_ck&&!_ck.deletedAt)_ck.durum=_ck.prevDurum||'portfoy'; /* v14-K7: tahsildeyken kapatilan cek silinince tahsilde durumuna doner */cascadeSoftDelete(S.cariTxns,x=>x.cekId===rec.cekId);}if(rec.posEId){var _pe=S.posEntries.find(x=>x.id===rec.posEId);if(_pe&&!_pe.deletedAt){_pe.status='bekliyor';_pe.noAutoSettle=1;} /* v14-K8: autoSettlePos ayni kaydi hemen yeniden uretmesin */cascadeSoftDelete(S.txns,t=>t.posEId===rec.posEId&&t.id!==id);cascadeSoftDelete(S.cariTxns,x=>x.posEId===rec.posEId);}if(rec.stokTxnId){cascadeSoftDelete(S.stockTxns,x=>x.id===rec.stokTxnId);cascadeSoftDelete(S.cardTxns,x=>x.stokTxnId===rec.stokTxnId);cascadeSoftDelete(S.cariTxns,x=>x.stokTxnId===rec.stokTxnId);}if(rec.assetId){cascadeSoftDelete(S.cardTxns,x=>x.assetId===rec.assetId);cascadeSoftDelete(S.cariTxns,x=>x.assetId===rec.assetId);}}}],
   pos:['POS tanımı, girişleri ve bağlı gelir/komisyon/cari kayıtları silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.pos,id,'pos',r=>'POS: '+r.name);var _peids=S.posEntries.filter(t=>t.posId===id).map(t=>t.id);cascadeSoftDelete(S.posEntries,t=>t.posId===id);cascadeSoftDelete(S.txns,t=>t.posEId&&_peids.indexOf(t.posEId)>-1);cascadeSoftDelete(S.cariTxns,t=>t.posEId&&_peids.indexOf(t.posEId)>-1);}], // v14-K5: eskiden yalnız tanım siliniyor, girişler yetim kalıp KPI'ları şişiriyordu
@@ -1253,6 +1281,9 @@ function del(kind,id){
   budget:['Bütçe kalemi silinsin mi?',()=>{softDelete(S.budgets,id,'budget',r=>'Bütçe: '+r.cat);}]
  }[kind];
  if(kind==='acc'){var _lt=S.txns.filter(function(t){return (t.accId===id||t.accId2===id)&&!t.deletedAt;}).length;if(_lt){toast('⛔ Bu hesapta '+_lt+' yaşayan işlem var — hesap silinirse bu işlemler sahipsiz kalır ve denetimde hata üretir. Bunun yerine hesap kartındaki "⏸ Pasife Al" düğmesini kullanın: bakiyesi ve geçmişi korunur, yalnızca yeni işlem listelerinden gizlenir.');return;}}
+ if(kind==='cari'){var _sc=S.cari.find(function(x){return x.id===id;});if(_sc&&_sc.sys){toast('⛔ Bu bir SİSTEM hesabıdır (merkez / ortak) — silinemez. Gerekiyorsa hareketlerini tek tek silin.');return;}}
+ var _icr=(typeof icRecFind==='function')?icRecFind(kind,id):null; var _icid=_icr&&_icr.icId;   /* v33: grup içi işlem — 2 defterdeki tüm karşı kayıtlar birlikte gider */
+ if(_icid&&R){var _f0=R[1];R=[R[0]+' — ⚠ Bu bir GRUP İÇİ (merkez) işlemdir: HER İKİ defterdeki tüm karşı kayıtlar da birlikte silinir.',function(){_f0();icCascade(_icid);}];}
  if(R)askDel(R[0],R[1]);
 }
 function askDel(msg,fn){ uiConfirm(msg||'Bu kayıt silinsin mi?',()=>{fn();save();toast('Kayıt çöp kutusuna taşındı — 30 gün içinde geri getirilebilir');go(PAGE);},{danger:1,title:'Silme Onayı',yes:'Evet, Sil'}); }
@@ -1262,7 +1293,7 @@ function restoreTrash(idxStr){
  const entry=(S.trash||[])[idx];
  if(!entry){toast('Kayıt bulunamadı');return;}
  const ARR={acc:S.accounts,tx:S.txns,pos:S.pos,posE:S.posEntries,card:S.cards,cardT:S.cardTxns,cari:S.cari,cariT:S.cariTxns,
-  staffT:S.staffTxns,leave:S.leaves,staffPerma:S.staff,fixed:S.fixed,fixedL:S.fixedLogs,task:S.tasks,note:S.notes,cek:S.cheques,stok:S.stock,stokT:S.stockTxns,asset:S.assets,budget:S.budgets};
+  staffT:S.staffTxns,leave:S.leaves,staffPerma:S.staff,fixed:S.fixed,fixedL:S.fixedLogs,task:S.tasks,note:S.notes,cek:S.cheques,stok:S.stock,stokT:S.stockTxns,asset:S.assets,budget:S.budgets,partner:(S.partners=S.partners||[])};
  const arr=ARR[entry.kind];
  const rec=arr?arr.find(x=>x.id===entry.id):null;
  if(!rec){toast('Kayıt bulunamadı (belki kalıcı silinmiş)');S.trash=(S.trash||[]).filter((e,i)=>i!==idx);save();return;}
@@ -1283,6 +1314,8 @@ function restoreTrash(idxStr){
  if(entry.kind==='posE'){S.txns.forEach(function(t){if(t.posEId===entry.id)__und(t);});S.cariTxns.forEach(function(t){if(t.posEId===entry.id)__und(t);});}
  if(entry.kind==='pos'){var _rp=[];S.posEntries.forEach(function(t){if(t.posId===entry.id&&t.deletedAt){__und(t);_rp.push(t.id);}});[S.txns,S.cariTxns].forEach(function(a2){a2.forEach(function(t){if(t.posEId&&_rp.indexOf(t.posEId)>-1)__und(t);});});} /* v14-K5 simetri */
  if(entry.kind==='fixed'){var _rf=[];S.fixedLogs.forEach(function(l){if(l.fixedId===entry.id&&l.deletedAt){__und(l);if(l.txnId)_rf.push(l.txnId);}});S.txns.forEach(function(t){if(_rf.indexOf(t.id)>-1)__und(t);});} /* v14-K6 simetri */
+ if(rec.icId&&typeof icRestore==='function')icRestore(rec.icId); /* v33: grup içi işlemin tamamı birlikte geri döner */
+ if(entry.kind==='partner'&&typeof ortakCariCascade==='function')ortakCariCascade(entry.id,true);
  S.trash=(S.trash||[]).filter((e,i)=>i!==idx);
  logAudit('Kayıt geri getirildi',entry.label||entry.kind);
  save();toast('Kayıt geri getirildi');go(PAGE);
@@ -1295,7 +1328,7 @@ function purgeOldTrash(){ // 30 günden eski silinmiş kayıtları kalıcı olar
   S.trash.forEach(e=>{ (e.deletedAt&&e.deletedAt.slice(0,10)<cutoff)?purge.push(e):keep.push(e); });
   if(!purge.length)return;
   const ARR={acc:S.accounts,tx:S.txns,pos:S.pos,posE:S.posEntries,card:S.cards,cardT:S.cardTxns,cari:S.cari,cariT:S.cariTxns,
-   staffT:S.staffTxns,leave:S.leaves,staffPerma:S.staff,fixed:S.fixed,fixedL:S.fixedLogs,task:S.tasks,note:S.notes,cek:S.cheques,stok:S.stock,stokT:S.stockTxns,asset:S.assets,budget:S.budgets};
+   staffT:S.staffTxns,leave:S.leaves,staffPerma:S.staff,fixed:S.fixed,fixedL:S.fixedLogs,task:S.tasks,note:S.notes,cek:S.cheques,stok:S.stock,stokT:S.stockTxns,asset:S.assets,budget:S.budgets,partner:(S.partners=S.partners||[])};
   purge.forEach(e=>{ const arr=ARR[e.kind]; if(arr){ const i=arr.findIndex(x=>x.id===e.id); if(i>-1)arr.splice(i,1); } });
   S.trash=keep;
   try{logAudit('Çöp kutusu kalıcı temizlik',purge.length+' kayıt');}catch(e){}
@@ -1304,7 +1337,7 @@ function purgeOldTrash(){ // 30 günden eski silinmiş kayıtları kalıcı olar
 }
 
 const accOpts=(co,empty)=>{const l=byCo(S.accounts,co).filter(a=>a.active!=='0').map(a=>[a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name]);return empty?[['','— Seçin —']].concat(l):l;};
-const cariOpts=co=>[['','— Cari yok —']].concat(byCo(S.cari,co).filter(c=>c.active!=='0').map(c=>[c.id,c.name]));
+const cariOpts=co=>[['','— Cari yok —']].concat(byCo(S.cari,co).filter(c=>c.active!=='0'&&!c.sys).map(c=>[c.id,c.name])); /* v36: merkez/ortak sistem hesapları elle seçilemez */
 const catOpts=t=>S.cats[t].map(c=>[c,c]);
 
 function quickAdd(){
@@ -1334,6 +1367,7 @@ function rDash(){
 
  document.getElementById('main').innerHTML= topbar('Ana Sayfa',
   `<button class="btn" data-act="quickAdd">＋ Hızlı İşlem</button>`)+
+ merkezDashCard(co)+
  (overdue?`<div class="card" data-act="scrollRem" style="cursor:pointer;background:linear-gradient(135deg,var(--neg),#e0564f);border:0;margin-bottom:12px"><h2 style="color:#fff;margin-bottom:0">⚠ ${overdue} vadesi geçmiş ödeme var — görmek için tıklayın ↓</h2></div>`:'')+
  (budOver?`<div class="card" data-act="go" data-arg="budget" style="cursor:pointer;background:linear-gradient(135deg,var(--warn),#d9a13f);border:0;margin-bottom:12px"><h2 style="color:#fff;margin-bottom:0">🎯 ${budOver} bütçe kalemi bu ay aşıldı — ayrıntılar için tıklayın</h2></div>`:'')+
  `<div class="grid g4" style="margin-bottom:16px">
@@ -1887,7 +1921,7 @@ function setCariTab(v){cariTab=v;rCari();}
 var cariVade=''; // B4: yaşlandırma kovası filtresi ('' = kapalı, '0'..'3')
 function setCariVade(v){cariVade=(String(cariVade)===String(v))?'':String(v);go('cari');}
 function rCari(){
- const allCari=byCo(S.cari,CO); // v32: TÜM cariler (aktif+pasif) — toplamlar bundan hesaplanır
+ const allCari=byCo(S.cari,CO).filter(c=>!(CO==='merkez'&&c.sys)); // v32: TÜM cariler (aktif+pasif) — toplamlar bundan hesaplanır · v33: merkezde şirket/ortak sistem hesapları kendi sekmelerinde gösterilir
  const all=allCari.filter(c=>c.active!=='0'); // yalnızca aktif — liste ve sekmeler için
  const inactiveCari=allCari.filter(c=>c.active==='0');
  const isM=c=>c.type==='musteri'||c.type==='her2';
@@ -1932,13 +1966,13 @@ function rCari(){
      <div class="tiny">${b>0?'bize borçlu':b<0?'biz borçluyuz':'hesap kapalı'}</div></div>
      ${vadeli.length?`<div><span class="chip ${vadeli.some(v=>daysDiff(v.vade)<=0)?'n':'w'}">⏰ ${vadeli.length} vadeli işlem</span></div>`:''}</div>
     <div class="cardBtns">
-     <button class="btn sm out" data-act="cariTxnForm" data-arg="${c.id}~borc">＋ Borç</button>
+     ${c.sys?(canAccessCo('merkez')?`<button class="btn sm gh" data-act="coJump" data-arg="merkez">🏛 Merkez Kasa ekranına git</button>`:'<span class="chip w">🏛 Merkezden otomatik yönetilir</span>'):`<button class="btn sm out" data-act="cariTxnForm" data-arg="${c.id}~borc">＋ Borç</button>
      <button class="btn sm in" data-act="cariTxnForm" data-arg="${c.id}~alacak">＋ Alacak</button>
-     <button class="btn sm gh" data-act="cariInvoiceForm" data-arg="${c.id}">🧾 Faturalaştır</button>
+     <button class="btn sm gh" data-act="cariInvoiceForm" data-arg="${c.id}">🧾 Faturalaştır</button>`}
      <button class="btn sm gh" data-act="cariDetail" data-arg="${c.id}">📄 Ekstre</button>
      <button class="btn sm gh" data-act="cariForm" data-arg="${c.id}">✎</button>
-     <button class="btn sm gh" data-act="cariDeactivate" data-arg="${c.id}">⏸ Pasife Al</button>
-     <button class="btn sm dng" data-act="del" data-arg="cari~${c.id}">Sil</button>
+     ${c.sys?'<span class="chip w" title="Merkez tarafından otomatik yönetilen sistem hesabı — silinemez">🔒 Sistem hesabı</span>':`<button class="btn sm gh" data-act="cariDeactivate" data-arg="${c.id}">⏸ Pasife Al</button>
+     <button class="btn sm dng" data-act="del" data-arg="cari~${c.id}">Sil</button>`}
     </div></div>`;}).join('')+`</div>`
   :`<div class="card"><div class="empty"><b>${cariVade!==''?'Bu gecikme aralığında cari yok':'Bu sekmede cari yok'}</b>${cariVade!==''?'Filtreyi kaldırıp tüm carileri görebilirsiniz.':'Müşteri ve tedarikçilerinizi ekleyin; borç-alacak ve vade takibi burada yapılır.'}</div></div>`}
  ${inactiveCari.length?`<div class="card"><h2>⏸ Pasif Cariler <span class="tiny">(${inactiveCari.length}) — bakiyeleri toplamlara dahil edilmeye devam eder, sadece yeni işlem listelerinden gizlenir</span></h2>
@@ -1971,6 +2005,12 @@ function cariForm(id){
 }
 function cariTxnForm(cariId,defType,init){
  const c=S.cari.find(x=>x.id===cariId)||{};
+ if(c.sys){ /* v36: merkez/ortak sistem hesabına elle hareket eklenirse iki defter arasındaki denge bozulur */
+  toast(String(c.sys).indexOf('ortak:')===0
+   ?'⛔ Bu bir ORTAK hesabıdır — hareket eklemek için Merkez > Ortaklar ekranındaki "💰 Para Girişi" / "💸 Ortağa Ödeme" düğmelerini kullanın'
+   :'⛔ Bu bir MERKEZ hesabıdır — elle hareket eklenemez. Merkez Kasa ekranındaki "Şirket Adına Öde" / "Nakit Aktar" / "Tahsilat" düğmelerini kullanın; kayıtlar iki deftere birden yazılır');
+  return;
+ }
  openForm('Cari Hareket — '+(c.name||''),[
   {name:'type',label:'İşlem',type:'select',opts:[['borc','Borçlandır (satış yaptık / alacağımız arttı)'],['alacak','Alacaklandır (tahsilat / borcumuz arttı)']],req:1,def:defType||'borc'},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
@@ -2015,6 +2055,7 @@ function cariTxnForm(cariId,defType,init){
    sadece kaydın üzerine fatura no/KDV gibi ek alanlar ve görsel bir "🧾 Fatura" etiketi ekleniyor. */
 function cariInvoiceForm(cariId){
  const c=S.cari.find(x=>x.id===cariId)||{};
+ if(c.sys){toast('⛔ Merkez / ortak hesabına fatura kesilemez — bu hesap Merkez Kasa ekranından otomatik yönetilir');return;} /* v36 */
  openForm('Faturalaştır — '+(c.name||''),[
   {name:'type',label:'Fatura Yönü',type:'select',opts:[['borc','Kestiğimiz fatura (satış — alacağımız artar)'],['alacak','Aldığımız fatura (alış — borcumuz artar)']],req:1,def:'borc'},
   {row:[{name:'faturaNo',label:'Fatura No',req:1,ph:'Ör: A2026-000145'},{name:'date',label:'Fatura Tarihi',type:'date',def:todayISO(),req:1}]},
@@ -2502,10 +2543,10 @@ function rGrup(){
  const rows=COMPANIES.map(c=>{
   const s=sumRange(c.id,from,to);
   let bal=0;for(const a of byCo(S.accounts,c.id))bal+=accBalance(a);
-  let alacak=0,borc=0;for(const cr of byCo(S.cari,c.id)){const b=cariBalance(cr);if(b>0)alacak+=b;else borc+=-b;}
+  let alacak=0,borc=0,mrk=0;for(const cr of byCo(S.cari,c.id)){const b=cariBalance(cr);if(cr.sys){mrk+=-b;continue;} /* v33: grup içi (merkez) bakiye konsolidede elenir, ayrı sütunda gösterilir */ if(b>0)alacak+=b;else borc+=-b;}
   let kartBorc=0;for(const k of byCo(S.cards,c.id))kartBorc+=Math.max(0,cardDebt(k));
   const maasYuku=byCo(S.staff,c.id).filter(x=>x.active!=='0').reduce((s2,x)=>s2+ +(x.salary||0),0);
-  return {c,s,bal,alacak,borc,kartBorc,maasYuku};
+  return {c,s,bal,alacak,borc,kartBorc,maasYuku,mrk};
  });
  const T=k=>rows.reduce((s,r)=>s+(k==='gelir'||k==='gider'||k==='net'?r.s[k]:r[k]),0);
  // grup 6 aylık trend
@@ -2541,14 +2582,15 @@ function rGrup(){
    ${chartArea(coSeries,gms.map(m=>m.label),230)}
   </div>
   <div class="card"><h2>Şirket Karşılaştırma Tablosu</h2>
-   <div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Gelir</th><th class="num">Gider</th><th class="num">Net</th><th class="num">Nakit+Banka</th><th class="num">Cari Alacak</th><th class="num">Cari Borç</th><th class="num">Kart Borcu</th><th class="num">Personel Gideri (dönem)</th><th class="num">Personel/Ciro %</th><th class="num">Sözleşme Maaş Toplamı (statik)</th></tr></thead><tbody>
+   <div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Gelir</th><th class="num">Gider</th><th class="num">Net</th><th class="num">Nakit+Banka</th><th class="num">Cari Alacak</th><th class="num">Cari Borç</th><th class="num" title="Şirketin merkeze borcu — grup toplamında elenmiştir">🏛 Merkez Borcu</th><th class="num">Kart Borcu</th><th class="num">Personel Gideri (dönem)</th><th class="num">Personel/Ciro %</th><th class="num">Sözleşme Maaş Toplamı (statik)</th></tr></thead><tbody>
    ${rows.map(r=>`<tr data-act="enterCo" data-arg="${r.c.id}" style="cursor:pointer" title="${esc(r.c.name)} şirketine gir"><td><b style="color:${r.c.color}">${r.c.name}</b></td>
     <td class="num" style="color:var(--pos)">${fmt0(r.s.gelir)}</td>
     <td class="num" style="color:var(--neg)">${fmt0(r.s.gider)}</td>
     <td class="num" style="font-weight:700">${fmt0(r.s.net)}</td>
     <td class="num" data-act="coJumpTo" data-arg="${r.c.id}~acc" title="Banka & Kasa ekranına git">${fmt0(r.bal)}</td><td class="num" data-act="coJumpTo" data-arg="${r.c.id}~cari" title="Cari Hesaplar ekranına git">${fmt0(r.alacak)}</td><td class="num" data-act="coJumpTo" data-arg="${r.c.id}~cari" title="Cari Hesaplar ekranına git">${fmt0(r.borc)}</td>
+    <td class="num" data-act="coJumpTo" data-arg="${r.c.id}~cari" title="Merkez Hesabı ekstresi">${fmt0(r.mrk)}</td>
     <td class="num" data-act="coJumpTo" data-arg="${r.c.id}~card" title="Kredi Kartları ekranına git">${fmt0(r.kartBorc)}</td><td class="num">${fmt0(r.s.byCat['Personel']||0)}</td><td class="num" style="color:${(function(){var _r=r.s.gelir?(r.s.byCat['Personel']||0)/r.s.gelir*100:0;return _r>35?'var(--neg)':_r<25?'var(--ink2)':'var(--pos)';})()}">${r.s.gelir?((r.s.byCat['Personel']||0)/r.s.gelir*100).toFixed(1)+'%':'—'}</td><td class="num">${fmt0(r.maasYuku)}</td></tr>`).join('')}
-   <tr style="background:var(--acc-soft)"><td><b>GRUP TOPLAMI</b></td><td class="num"><b>${fmt0(T('gelir'))}</b></td><td class="num"><b>${fmt0(T('gider'))}</b></td><td class="num"><b>${fmt0(T('net'))}</b></td><td class="num"><b>${fmt0(T('bal'))}</b></td><td class="num"><b>${fmt0(T('alacak'))}</b></td><td class="num"><b>${fmt0(T('borc'))}</b></td><td class="num"><b>${fmt0(T('kartBorc'))}</b></td><td class="num"><b>${fmt0(rows.reduce((s2,r)=>s2+(r.s.byCat['Personel']||0),0))}</b></td><td class="num"><b>${(function(){var tg=T('gelir'),tp=rows.reduce((s2,r)=>s2+(r.s.byCat['Personel']||0),0);return tg?(tp/tg*100).toFixed(1)+'%':'—';})()}</b></td><td class="num"><b>${fmt0(T('maasYuku'))}</b></td></tr>
+   <tr style="background:var(--acc-soft)"><td><b>GRUP TOPLAMI</b></td><td class="num"><b>${fmt0(T('gelir'))}</b></td><td class="num"><b>${fmt0(T('gider'))}</b></td><td class="num"><b>${fmt0(T('net'))}</b></td><td class="num"><b>${fmt0(T('bal'))}</b></td><td class="num"><b>${fmt0(T('alacak'))}</b></td><td class="num"><b>${fmt0(T('borc'))}</b></td><td class="num"><b>${fmt0(T('mrk'))}</b></td><td class="num"><b>${fmt0(T('kartBorc'))}</b></td><td class="num"><b>${fmt0(rows.reduce((s2,r)=>s2+(r.s.byCat['Personel']||0),0))}</b></td><td class="num"><b>${(function(){var tg=T('gelir'),tp=rows.reduce((s2,r)=>s2+(r.s.byCat['Personel']||0),0);return tg?(tp/tg*100).toFixed(1)+'%':'—';})()}</b></td><td class="num"><b>${fmt0(T('maasYuku'))}</b></td></tr>
    </tbody></table></div></div>
   <div id="aiBox"></div>`;
 }
@@ -4704,6 +4746,9 @@ function coMenuHtml(){
   var bal=0;byCo(S.accounts,c.id).forEach(function(a){bal+=accBalance(a);});
   h+='<button data-act="coJump" data-arg="'+c.id+'"><span class="cdot" style="background:'+c.color+'"></span><b>'+c.name+'</b>'+(c.id===CO?'<span class="chip p" style="margin-left:4px">Aktif</span>':'')+'<span class="bal">'+kfmt(bal)+' ₺</span></button>';
  });
+ if(canAccessCo('merkez')){
+  h+='<button data-act="coJump" data-arg="merkez"><span class="cdot" style="background:#0c6b58"></span><b>🏛 LOLE MERKEZ</b>'+(CO==='merkez'?'<span class="chip p" style="margin-left:4px">Aktif</span>':'')+'<span class="bal">Merkez Kasa</span></button>';
+ }
  h+='<div class="sep"></div>';
  if(canAccessCo('grup')){
   h+='<button data-act="coJump" data-arg="grup"><span class="cdot" style="background:#0c6b58"></span><b>LOLE GRUP</b>'+(CO==='grup'?'<span class="chip p" style="margin-left:4px">Aktif</span>':'')+'<span class="bal">Konsolide</span></button>';
@@ -4721,6 +4766,7 @@ function coJump(id){
  var keep=PAGE;
  enterCo(id);
  if(id==='grup'){ if(keep==='set')go('set'); return; }
+ if(id==='merkez')return; /* v33: merkeze girişte doğrudan Merkez Kasa ekranı açılır */
  if(keep&&keep!=='grup'&&keep!=='dash')go(keep);
  toast(coName(id)+' ekranındasınız');
 }
@@ -4794,6 +4840,9 @@ function canAccessCo(id){
  if(!SESSION)return false;
  if(SESSION.role==='super')return true;
  var comps=SESSION.companies;
+ /* v35: merkez kasa ve ortak hesapları ARTIK yetki verilerek müdür/personele de açılabilir.
+    "Tüm şirketler" seçilmiş olmak yetmez — bu ikisi ayrıca işaretlenmelidir (varsayılan: kapalı). */
+ if(id==='merkez'||id==='ortak') return comps==='all' || (Array.isArray(comps)&&comps.indexOf(id)!==-1);
  var allIds=COMPANIES.map(function(c){return c.id;});
  var hasAll = comps==='all' || (Array.isArray(comps)&&allIds.every(function(x){return comps.indexOf(x)!==-1;}));
  if(id==='grup')return hasAll;
@@ -4927,7 +4976,7 @@ function auditLogCard(){
 function usersCard(){
  if(!isSuper())return '';
  var rows=(S.users||[]).map(function(u){
-  var coLbl = u.role==='super' ? 'Tüm şirketler' : (u.companies==='all' ? 'Tüm şirketler' : ((Array.isArray(u.companies)&&u.companies.length) ? u.companies.map(coName).join(', ') : '—'));
+  var coLbl = u.role==='super' ? 'Tüm şirketler' : (u.companies==='all' ? 'Tüm şirketler' : ((Array.isArray(u.companies)&&u.companies.length) ? u.companies.map(accessLabel).join(', ') : '—'));
   var me = (SESSION&&u.id===SESSION.id);
   return '<tr><td><b>'+esc(u.displayName||u.username||'—')+'</b>'+(u.title?' <span class="chip g">'+esc(u.title)+'</span>':'')+(u.email?'<div class="tiny">'+esc(u.email)+'</div>':'')+(me?' <span class="chip g">Siz</span>':'')+'</td>' /* v14-Z2: unvan ve görünen ad hiç gösterilmiyordu */
    +'<td>'+(u.role==='super'?'<span class="chip w">Süper Yönetici</span>':'<span class="chip g">Kullanıcı</span>')+'</td>'
@@ -4938,7 +4987,44 @@ function usersCard(){
  return '<div class="card"><h2>👤 Kullanıcı Yönetimi <span class="chip g">'+(S.users||[]).length+' kullanıcı</span></h2>'+
   '<p class="mut" style="margin-bottom:12px"><b>Giriş Supabase Auth ile, E-POSTA üzerinden yapılır</b> — kullanıcıyı buraya eklerken yazdığınız e-posta, kişinin Supabase\'te oturum açtığı e-posta ile birebir aynı olmalıdır; eşleşmezse kişi giriş yapamaz ya da yetkisiz yeni bir kayıt olarak açılır. Buradaki şifre alanı yalnızca Supabase\'in devre dışı olduğu yedek/yerel giriş içindir.</p>'+ /* v14-Z1: eski metin gerçeği anlatmıyordu */
   '<div style="overflow-x:auto"><table><thead><tr><th>Kullanıcı</th><th>Rol</th><th>Şirket Erişimi</th><th>Eklendi</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
-  '<button class="btn sm" style="margin-top:12px" data-act="addUserAsk">＋ Kullanıcı Ekle</button></div>';
+  '<div class="cardBtns" style="margin-top:12px"><button class="btn sm" data-act="addUserAsk">＋ Kullanıcı Ekle</button>'+
+  '<button class="btn sm gh" data-act="grantAllAccess" data-arg="merkez">🏛 Merkez Kasa yetkisini herkese aç</button>'+
+  '<button class="btn sm gh" data-act="grantAllAccess" data-arg="ortak">👥 Ortaklar yetkisini herkese aç</button>'+
+  '<button class="btn sm dng" data-act="revokeAllAccess" data-arg="ortak">🔒 Ortaklar yetkisini herkesten kaldır</button></div>'+
+  '<p class="tiny" style="margin-top:8px">🏛 <b>Merkez Kasa</b> yetkisi: kullanıcı merkezden şirket adına ödeme, nakit aktarım ve tahsilat yapabilir — yalnızca <b>kendi erişimi olan şirketler</b> için. 👥 <b>Ortaklar &amp; Sermaye</b> ayrı ve hassas bir yetkidir (ortakların koyduğu para, kâr payları); yalnızca gerçekten görmesi gerekenlere verin. Tek tek ayarlamak için kullanıcının ✎ düğmesini kullanın.</p></div>';
+}
+function ACCESS_OPTS(){ /* v35: 4 şirket + merkez kasa + ortaklar — her biri ayrı ayrı verilebilir */
+ return COMPANIES.map(function(c){return [c.id,c.name];})
+  .concat([['merkez','🏛 LOLE MERKEZ — Merkez Kasa (şirket adına ödeme, aktarım, tahsilat)'],
+           ['ortak','👥 Ortaklar & Sermaye — HASSAS: ortakların koyduğu para ve kâr payları']]);
+}
+function accessLabel(id){return id==='merkez'?'🏛 Merkez Kasa':id==='ortak'?'👥 Ortaklar':coName(id);}
+function grantAllAccess(kind){
+ if(!isSuper()){toast('Bu işlem yalnızca süper yöneticiye açıktır');return;}
+ if(kind!=='merkez'&&kind!=='ortak')return;
+ var lbl=kind==='merkez'?'🏛 Merkez Kasa':'👥 Ortaklar & Sermaye';
+ var hedef=(S.users||[]).filter(function(u){return u.role!=='super'&&Array.isArray(u.companies)&&u.companies.indexOf(kind)===-1;});
+ if(!hedef.length){toast('Tüm kullanıcılarda '+lbl+' yetkisi zaten açık');return;}
+ uiConfirm(hedef.length+' kullanıcıya '+lbl+' yetkisi verilecek: '+hedef.map(function(u){return u.username;}).join(', ')+'.'+
+  (kind==='ortak'?'\n\n⚠ DİKKAT: Ortaklar ekranı ortakların koyduğu sermayeyi, ortak cari bakiyelerini ve ödenen kâr paylarını gösterir. Bu bilgiyi görmesini istemediğiniz kişiler varsa bu düğme yerine tek tek ✎ ile verin.':'')+
+  '\n\nNot: Kullanıcılar yalnızca zaten erişimi olan şirketler için işlem yapabilir.',
+ function(){
+  hedef.forEach(function(u){u.companies.push(kind);if(SESSION&&u.id===SESSION.id)SESSION.companies=u.companies;});
+  logAudit('Toplu yetki verildi',lbl+' → '+hedef.length+' kullanıcı');
+  save();toast('✅ '+hedef.length+' kullanıcıya '+lbl+' yetkisi verildi');rSet();
+ },{title:'Yetki Ver',yes:'Evet, Yetki Ver'});
+}
+function revokeAllAccess(kind){
+ if(!isSuper()){toast('Bu işlem yalnızca süper yöneticiye açıktır');return;}
+ var lbl=kind==='merkez'?'🏛 Merkez Kasa':'👥 Ortaklar & Sermaye';
+ var hedef=(S.users||[]).filter(function(u){return u.role!=='super'&&Array.isArray(u.companies)&&u.companies.indexOf(kind)!==-1;});
+ if(!hedef.length){toast('Zaten hiçbir kullanıcıda '+lbl+' yetkisi yok');return;}
+ uiConfirm(hedef.length+' kullanıcıdan '+lbl+' yetkisi kaldırılacak: '+hedef.map(function(u){return u.username;}).join(', ')+'. Kayıtlar silinmez, yalnızca ekran gizlenir.',
+ function(){
+  hedef.forEach(function(u){u.companies=u.companies.filter(function(x){return x!==kind;});if(SESSION&&u.id===SESSION.id)SESSION.companies=u.companies;});
+  logAudit('Toplu yetki kaldırıldı',lbl+' → '+hedef.length+' kullanıcı');
+  save();toast('🔒 '+hedef.length+' kullanıcıdan '+lbl+' yetkisi kaldırıldı');rSet();
+ },{danger:1,title:'Yetki Kaldır',yes:'Evet, Kaldır'});
 }
 function addUserAsk(){
  if(!isSuper())return;
@@ -4947,7 +5033,7 @@ function addUserAsk(){
   {name:'email',label:'E-posta (GİRİŞ ANAHTARI — Supabase Auth e-postasıyla birebir aynı olmalı)',req:1,ph:'ornek@eposta.com'},
   {name:'password',label:'Yedek giriş şifresi (opsiyonel — yalnız Supabase kapalıyken kullanılır)',ph:'En az 10 karakter'},
   {name:'role',label:'Rol',type:'select',opts:[['user','Kullanıcı'],['super','Süper Yönetici']]},
-  {name:'companies',label:'Şirket Erişimi (Süper Yönetici için yok sayılır)',type:'checks',opts:COMPANIES.map(function(c){return [c.id,c.name];})}
+  {name:'companies',label:'Erişim Yetkileri (Süper Yönetici için yok sayılır)',type:'checks',opts:ACCESS_OPTS()}
  ],async function(o){
   var username=(o.username||'').trim().toLowerCase().replace(/\s+/g,'');
   if(!/^[a-z0-9_.-]{2,20}$/.test(username)){toast('Kullanıcı adı 2-20 karakter olmalı, yalnızca harf/rakam/._- içerebilir');return;}
@@ -4970,13 +5056,13 @@ function editUserAsk(id){
  if(!isSuper())return;
  var u=(S.users||[]).find(function(x){return x.id===id;});
  if(!u)return;
- var initCo = u.companies==='all' ? COMPANIES.map(function(c){return c.id;}) : (Array.isArray(u.companies)?u.companies:[]);
+ var initCo = u.companies==='all' ? ACCESS_OPTS().map(function(c){return c[0];}) : (Array.isArray(u.companies)?u.companies:[]);
  openForm('Kullanıcıyı Düzenle',[
   {name:'username',label:'Kullanıcı adı',req:1},
   {name:'password',label:'Yeni şifre (boş = değişmez)',ph:'En az 10 karakter'},
   {name:'email',label:'E-posta (opsiyonel)'},
   {name:'role',label:'Rol',type:'select',opts:[['user','Kullanıcı'],['super','Süper Yönetici']]},
-  {name:'companies',label:'Şirket Erişimi (Süper Yönetici için yok sayılır)',type:'checks',opts:COMPANIES.map(function(c){return [c.id,c.name];})}
+  {name:'companies',label:'Erişim Yetkileri (Süper Yönetici için yok sayılır)',type:'checks',opts:ACCESS_OPTS()}
  ],async function(o){
   var username=(o.username||'').trim().toLowerCase().replace(/\s+/g,'');
   if(!/^[a-z0-9_.-]{2,20}$/.test(username)){toast('Kullanıcı adı 2-20 karakter olmalı, yalnızca harf/rakam/._- içerebilir');return;}
@@ -5101,7 +5187,7 @@ function integrityChecks(){
  var acc=function(id){ return S.accounts.find(function(a){return a.id===id&&!a.deletedAt;}); }; // A8: silinmis hesap 'var' sayilmasin
  A('Hesapsız nakit cari hareketi','Nakit seçilmiş ama kasa/banka/kart belirtilmemiş — Cari sayfasındaki "Düzeltilecekler" listesinden düzeltin.','cari', orphanCashTxns());
  A('Hesaba bağlı olmayan işlem','Gelir/gider kaydının bağlı olduğu kasa/banka bulunamadı — işlemi silip doğru hesapla yeniden girin.','tx',
-  S.txns.filter(function(t){return !t.deletedAt&&canAccessCo(t.co)&&t.type!=='virman'&&t.src!=='card'&&t.src!=='stok'&&(!t.accId||!acc(t.accId));}));
+  S.txns.filter(function(t){return !t.deletedAt&&canAccessCo(t.co)&&t.type!=='virman'&&t.src!=='card'&&t.src!=='stok'&&t.src!=='merkez'&&t.src!=='merkez-kart'&&t.src!=='merkez-dagitim'&&(!t.accId||!acc(t.accId));}));
  A('Eksik virman','Virmanın gönderen veya alan hesabı eksik/geçersiz.','tx',
   S.txns.filter(function(t){return !t.deletedAt&&canAccessCo(t.co)&&t.type==='virman'&&(!acc(t.accId)||!acc(t.accId2));}));
  A('Tek taraflı silinmiş bağlantı','Bir kaydın bağlı eşi silinmiş ama kendisi duruyor — kaydı silip yeniden girin.','tx',
@@ -5130,7 +5216,7 @@ function integrityChecks(){
     return false; })
   .concat(S.staffTxns.filter(function(st2){ if(st2.deletedAt||!canAccessCo(st2.co)||!st2.accId)return false; if(['maas','avans','prim'].indexOf(st2.type)<0)return false; return !S.txns.some(function(t){return t.staffTxnId===st2.id&&!t.deletedAt;}); }))
   .concat(S.staffTxns.filter(function(st3){ if(st3.deletedAt||!canAccessCo(st3.co)||!st3.cardId)return false; if(['maas','avans','prim'].indexOf(st3.type)<0)return false; return !S.cardTxns.some(function(t){return t.staffTxnId===st3.id&&!t.deletedAt;}); }))
-  .concat(S.cardTxns.filter(function(ct2){ if(ct2.deletedAt||!canAccessCo(ct2.co)||ct2.type!=='harcama')return false; return !S.txns.some(function(t){return t.cardTxnId===ct2.id&&!t.deletedAt;}); })));
+  .concat(S.cardTxns.filter(function(ct2){ if(ct2.deletedAt||!canAccessCo(ct2.co)||ct2.type!=='harcama'||ct2.ic)return false; return !S.txns.some(function(t){return t.cardTxnId===ct2.id&&!t.deletedAt;}); })));
  A('POS "geçti" ama gelir kaydı yok','POS girişi hesaba geçmiş görünüyor ama bağlı yaşayan gelir işlemi yok.','pos',
   S.posEntries.filter(function(p2){ if(p2.deletedAt||!canAccessCo(p2.co)||p2.status!=='gecti')return false; return !S.txns.some(function(t){return t.posEId===p2.id&&t.type==='gelir'&&!t.deletedAt;}); }));
  A('Negatif stok','Stok miktarı eksiye düşmüş — sayım yapın veya eksik giriş hareketini ekleyin.','stok',
@@ -5159,6 +5245,7 @@ function integrityChecks(){
   Object.keys(grp).forEach(function(k){ var g=grp[k]; if(g.a>0&&g.d>0){ var ct=S.cardTxns.find(function(x){return x.id===k;}); if(ct&&!ct.deletedAt) bad=bad.concat(g.items); } });
   A('Yarım silinmiş taksit grubu','Aynı taksitli harcamanın bazı taksitleri silinmiş bazıları duruyor — grubu silip yeniden girin.','card',bad);
  })();
+ try{res=res.concat(merkezChecks());}catch(e){} /* v33: merkez/ortak bekçileri */
  return res;
 }
 function runIntegrity(mode){
@@ -5192,13 +5279,13 @@ function goTxCat(type,cat,from,to){
 function addMonthsClamped(iso,n){var pp=String(iso).split('-');var y=+pp[0],m=+pp[1],d=+pp[2];var t=(m-1)+n;var y2=y+Math.floor(t/12);var m2=(t%12)+1;return clampDay(y2,m2,d);}
 function upcomingInstCard(co){
  var end=addMonthsClamped(todayISO(),6);
- var ups=S.txns.filter(function(t){return t.co===co&&!t.deletedAt&&t.src==='card'&&t.taksitNo&&t.date>todayISO()&&t.date<=end;}).sort(function(a,b){return a.date<b.date?-1:1;});
+ var ups=S.txns.filter(function(t){return t.co===co&&!t.deletedAt&&(t.src==='card'||t.src==='merkez-kart')&&t.taksitNo&&t.date>todayISO()&&t.date<=end;}).sort(function(a,b){return a.date<b.date?-1:1;});
  if(!ups.length)return '';
  var tot=ups.reduce(function(sm,t){return sm+ +t.amount;},0);
- var cardName=function(t){var ct=S.cardTxns.find(function(k){return k.id===t.cardTxnId;});var c=ct?S.cards.find(function(k){return k.id===ct.cardId;}):null;return c?{name:c.name,id:c.id}:{name:'',id:''};}; // C7: kart adı + kimliği
+ var cardName=function(t){var ct=S.cardTxns.find(function(k){return k.id===t.cardTxnId;});var c=ct?S.cards.find(function(k){return k.id===ct.cardId;}):null;if(!c)return {name:'',id:''};return t.src==='merkez-kart'?{name:'🏛 '+c.name+' (merkez)',id:''}:{name:c.name,id:c.id};}; // C7 · v34: merkez kartı taksitleri ayrı işaretlenir
  return '<div class="card"><h2>📅 Gelecek Taksitler <span class="tiny">önümüzdeki 6 ay · toplam '+fmt0(tot)+'</span></h2>'+
   '<div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Kart</th><th>Açıklama</th><th class="num">Tutar</th></tr></thead><tbody>'+
-  ups.slice(0,40).map(function(t){var _cn=cardName(t);return '<tr><td>'+dTR(t.date)+'</td><td>'+(_cn.id?'<span data-act="cardDetail" data-arg="'+_cn.id+'" style="cursor:pointer;text-decoration:underline dotted" title="Kart detayını aç">'+esc(_cn.name)+'</span>':'')+'</td><td>'+esc(t.desc||'')+' <span class="chip w">'+esc(t.taksitNo)+'</span></td><td class="num">'+fmt(t.amount)+'</td></tr>';}).join('')+
+  ups.slice(0,40).map(function(t){var _cn=cardName(t);return '<tr><td>'+dTR(t.date)+'</td><td>'+(_cn.id?'<span data-act="cardDetail" data-arg="'+_cn.id+'" style="cursor:pointer;text-decoration:underline dotted" title="Kart detayını aç">'+esc(_cn.name)+'</span>':esc(_cn.name))+'</td><td>'+esc(t.desc||'')+' <span class="chip w">'+esc(t.taksitNo)+'</span></td><td class="num">'+fmt(t.amount)+'</td></tr>';}).join('')+
   '</tbody></table></div>'+(ups.length>40?'<div class="tiny" style="padding:6px">İlk 40 taksit gösteriliyor.</div>':'')+
   '<p class="tiny" style="margin-top:8px">Her taksit, kendi ayının gider raporuna otomatik yansır; kart borcunuz ödeme yaptıkça azalır.</p></div>';
 }
@@ -5456,7 +5543,7 @@ function taskTakip(){
  try{window.scrollTo(0,0);}catch(e){}
 }
 /* ---- v15: TUTARLILIK DENETİMİ ONARIM ARACI ---- */
-var INTEG_ONAR={'Tek taraflı silinmiş bağlantı':1,'Çeki silinmiş işlem':1,'Çek-cari bağı kopuk':1,'Nakit üretmiş ama işlemi olmayan kayıt':1,'Stok bağı kopuk kayıt':1,'Demirbaşı silinmiş kayıt':1,'POS tanımı silinmiş giriş':1,'Tanımı silinmiş sabit ödeme kaydı':1,'Carisi silinmiş cari hareketi':1,'Kartı silinmiş kart hareketi':1,'Bağlı cari kaydı silinmiş gelir/gider':1,'Yarım silinmiş taksit grubu':1,'POS "geçti" ama gelir kaydı yok':1};
+var INTEG_ONAR={'Tek taraflı silinmiş bağlantı':1,'Çeki silinmiş işlem':1,'Çek-cari bağı kopuk':1,'Nakit üretmiş ama işlemi olmayan kayıt':1,'Stok bağı kopuk kayıt':1,'Demirbaşı silinmiş kayıt':1,'POS tanımı silinmiş giriş':1,'Tanımı silinmiş sabit ödeme kaydı':1,'Carisi silinmiş cari hareketi':1,'Kartı silinmiş kart hareketi':1,'Bağlı cari kaydı silinmiş gelir/gider':1,'Yarım silinmiş taksit grubu':1,'POS "geçti" ama gelir kaydı yok':1,'Yarım kalmış merkez işlemi':1};
 function integrityOnarilabilir(t){return !!INTEG_ONAR[t];}
 function _integKind(rec){
  var M=[[S.txns,'tx'],[S.cariTxns,'cariT'],[S.cardTxns,'cardT'],[S.staffTxns,'staffT'],[S.posEntries,'posE'],[S.fixedLogs,'fixedL'],[S.cheques,'cek'],[S.stockTxns,'stokT'],[S.assets,'asset'],[S.cari,'cari'],[S.cards,'card'],[S.pos,'pos']];
@@ -5514,3 +5601,960 @@ window.__v7=true;
 
 
 
+
+/* ==================================================================================
+   MERKEZ KASA + ORTAKLAR (v33)
+   Grup içi (intercompany) muhasebe katmanı.
+   Kilitlenen kararlar:
+    - Ortak parası: Sermaye ve Ortak Cari AYRI izlenir
+    - Gider: FAYDALANAN ŞİRKETTE yazılır; merkezde yalnızca alacak doğar
+    - Şirketin merkeze borcu: sadece takip; istenirse gerçek transferle kapatılır
+    - Merkezin kendi geliri YOK, gideri VAR
+   Her merkez işlemi 2 defterde 2-4 kayıt üretir; hepsi tek bir icId ile bağlıdır.
+   ================================================================================== */
+
+/* ---------- Kimlik & yardımcılar ---------- */
+function isMerkez(){return CO==='merkez';}
+function ensureCat(t,name){try{S.cats=S.cats||{};S.cats[t]=S.cats[t]||[];if(S.cats[t].indexOf(name)<0)S.cats[t].push(name);}catch(e){}} /* v34: grup içi kategoriler listede de görünsün */
+function merkezCoOpts(){return COMPANIES.filter(function(c){return canAccessCo(c.id);}).map(function(c){return [c.id,c.name];});}
+function merkezCos(){return COMPANIES.filter(function(c){return canAccessCo(c.id);});} /* v35: kullanıcının yetkili olduğu şirketler */
+function merkezYetkiUyari(coId){ /* v35: merkez yetkisi olsa bile hedef şirkete yetkisi yoksa kayıt açılamaz */
+ if(canAccessCo(coId))return false;
+ toast('⛔ '+coName(coId)+' şirketinde işlem yetkiniz yok — yöneticinizden bu şirket için erişim isteyin');
+ return true;
+}
+function findMerkezCari(coId){return S.cari.find(function(x){return x.co==='merkez'&&x.sys==='co:'+coId&&!x.deletedAt;});}
+function findCoMerkezCari(coId){return S.cari.find(function(x){return x.co===coId&&x.sys==='merkez'&&!x.deletedAt;});}
+function merkezCari(coId){ // merkez defterindeki şirket hesabı (yoksa oluşturur)
+ var c=findMerkezCari(coId); if(c)return c;
+ return pushRec(S.cari,{id:nid(),co:'merkez',name:coName(coId),type:'diger',sys:'co:'+coId,opening:0,vadeGun:0,note:'Grup içi hesap — otomatik oluşturuldu'});
+}
+function coMerkezCari(coId){ // şirket defterindeki merkez hesabı (yoksa oluşturur)
+ var c=findCoMerkezCari(coId); if(c)return c;
+ return pushRec(S.cari,{id:nid(),co:coId,name:'🏛 Merkez Hesabı',type:'diger',sys:'merkez',opening:0,vadeGun:0,note:'Şirket merkezi ile cari hesap — otomatik oluşturuldu'});
+}
+function partnerList(){S.partners=S.partners||[];return S.partners.filter(function(p){return !p.deletedAt;});}
+function partnerById(id){S.partners=S.partners||[];return S.partners.find(function(p){return p.id===id;});}
+const OKIND_LBL={sermaye:'Sermaye',cari:'Ortak Cari',dagitim:'Kâr Payı / Çekiş'};
+function findOrtakCari(pid,kind){return S.cari.find(function(x){return x.co==='merkez'&&x.sys==='ortak:'+pid+':'+kind&&!x.deletedAt;});}
+function ortakCari(pid,kind){
+ var c=findOrtakCari(pid,kind); if(c)return c;
+ var p=partnerById(pid)||{name:'Ortak'};
+ return pushRec(S.cari,{id:nid(),co:'merkez',name:p.name+' — '+(OKIND_LBL[kind]||kind),type:'diger',sys:'ortak:'+pid+':'+kind,opening:0,vadeGun:0,note:'Ortak hesabı — otomatik oluşturuldu'});
+}
+function balOf(c){return c?cariBalance(c):0;}
+/* + : şirket merkeze borçlu · − : merkez şirkete borçlu */
+function merkezCoBal(coId){return balOf(findMerkezCari(coId));}
+/* şirket tarafındaki ayna: + : merkeze borcumuz */
+function coMerkezBorc(coId){return -balOf(findCoMerkezCari(coId));}
+function ortakSermaye(pid){return -balOf(findOrtakCari(pid,'sermaye'));}
+function ortakCariBal(pid){return -balOf(findOrtakCari(pid,'cari'));}
+function ortakCekis(pid){return balOf(findOrtakCari(pid,'dagitim'));}
+function ortakNet(pid){return ortakSermaye(pid)+ortakCariBal(pid);}
+
+/* ---------- Grup içi kayıt kümesi (icId) silme/geri alma ---------- */
+function icArrays(){return [S.txns,S.cariTxns,S.cardTxns,S.staffTxns,S.fixedLogs];}
+function icCascade(icId){
+ if(!icId)return 0;var n=0,now=new Date().toISOString(),by=SESSION?SESSION.username:'';
+ icArrays().forEach(function(arr){arr.forEach(function(r){if(r.icId===icId&&!r.deletedAt){r.deletedAt=now;r.deletedBy=by;n++;}});});
+ return n;
+}
+function icRestore(icId){
+ if(!icId)return 0;var n=0;
+ icArrays().forEach(function(arr){arr.forEach(function(r){if(r.icId===icId&&r.deletedAt){delete r.deletedAt;delete r.deletedBy;n++;}});});
+ return n;
+}
+function icRecFind(kind,id){
+ var A={tx:S.txns,cariT:S.cariTxns,cardT:S.cardTxns,staffT:S.staffTxns,fixedL:S.fixedLogs}[kind];
+ return A?A.find(function(x){return x.id===id;}):null;
+}
+function icCount(icId){var n=0;icArrays().forEach(function(arr){arr.forEach(function(r){if(r.icId===icId&&!r.deletedAt)n++;});});return n;}
+
+/* ---------- Ortak yazıcı: merkez tarafı ---------- */
+function merkezOdemeYaz(o){
+ /* o: {coId, method, amount, date, desc, icId, kar:'borc'|'alacak'} — merkezden PARA ÇIKIŞI (borc) */
+ ensureCat('gider','Grup İçi');
+ var mc=merkezCari(o.coId),icId=o.icId,isCard=String(o.method||'').indexOf('card:')===0;
+ var cardId=isCard?String(o.method).slice(5):'',accId=isCard?'':o.method;
+ var mctId=nid();
+ pushRec(S.cariTxns,{id:mctId,co:'merkez',cariId:mc.id,type:'borc',amount:+o.amount,date:o.date,desc:o.desc,
+  nakit:isCard?'':'gider',accId:accId||'',cardId:cardId||'',ic:true,icId:icId,mo:o.mo||null});
+ if(isCard){
+  pushRec(S.cardTxns,{id:nid(),co:'merkez',cardId:cardId,type:'harcama',amount:+o.amount,date:o.date,
+   taksit:+o.taksit||1,cat:'Grup İçi',
+   desc:'🏛 '+coName(o.coId)+' adına — '+(o.desc||'')+((+o.taksit||1)>1?' ('+o.taksit+' taksit)':''),cariTxnId:mctId,ic:true,icId:icId});
+ }else{
+  pushRec(S.txns,{id:nid(),co:'merkez',type:'gider',date:o.date,amount:+o.amount,accId:accId,
+   cat:'Grup İçi',desc:'▶ '+coName(o.coId)+' — '+(o.desc||''),xfer:true,ic:true,icId:icId,
+   cariId:mc.id,cariTxnId:mctId});
+ }
+ return mctId;
+}
+
+/* ================== MERKEZ SAYFASI ================== */
+function rMerkez(){
+ S.partners=S.partners||[];
+ var accs=byCo(S.accounts,'merkez');
+ var bal=0;accs.forEach(function(a){bal+=accBalance(a);});
+ var kartBorc=0;byCo(S.cards,'merkez').forEach(function(k){kartBorc+=Math.max(0,cardDebt(k));});
+ var _cos=merkezCos(); /* v35: yalnızca erişim yetkisi olan şirketler */
+ var _ortakYetki=canAccessCo('ortak');
+ var rows=_cos.map(function(c){
+  var m=merkezCoBal(c.id),k=coMerkezBorc(c.id);
+  return {c:c,m:m,k:k,fark:Math.abs(m-k)};
+ });
+ var toplamAlacak=rows.reduce(function(s,r){return s+Math.max(0,r.m);},0);
+ var toplamBorc=rows.reduce(function(s,r){return s+Math.max(0,-r.m);},0);
+ var sermayeTop=0,ortakCariTop=0;
+ if(_ortakYetki)partnerList().forEach(function(p){sermayeTop+=ortakSermaye(p.id);ortakCariTop+=ortakCariBal(p.id);});
+ var uyum=rows.filter(function(r){return r.fark>0.01;});
+ var m30=sumRange('merkez',addDays(todayISO(),-29),todayISO());
+
+ document.getElementById('main').innerHTML= topbar('🏛 Merkez Kasa',
+  '<button class="btn" data-act="merkezOdeSec">＋ Şirket Adına Ödeme</button>'+
+  '<button class="btn gh" data-act="merkezAktarSec">⇄ Nakit Aktar</button>')+
+ (uyum.length?'<div class="card" style="background:linear-gradient(135deg,var(--neg),#e0564f);border:0;margin-bottom:12px"><h2 style="color:#fff;margin-bottom:4px">⚠ Ayna bakiye uyuşmazlığı</h2><p style="color:#fff;font-size:12.5px;margin:0">'+uyum.map(function(r){return esc(r.c.name)+' (fark '+fmt0(r.fark)+')';}).join(' · ')+' — Ayarlar → Sistem Tutarlılık Denetimi ekranından inceleyin.</p></div>':'')+
+ '<div class="grid g4" style="margin-bottom:16px">'+
+  '<div class="kpi a" data-act="go" data-arg="acc" style="cursor:pointer"><div class="l">Merkez Nakit + Banka ↗</div><div class="v">'+fmt0(bal)+'</div><div class="s">'+accs.length+' hesap</div></div>'+
+  '<div class="kpi n" data-act="go" data-arg="card" style="cursor:pointer"><div class="l">Merkez Kart Borcu ↗</div><div class="v">'+fmt0(kartBorc)+'</div><div class="s">'+byCo(S.cards,'merkez').length+' kart</div></div>'+
+  '<div class="kpi p"><div class="l">Şirketlerden Alacağımız</div><div class="v">'+fmt0(toplamAlacak)+'</div><div class="s">'+(toplamBorc?'Şirketlere borcumuz: '+fmt0(toplamBorc):'Borcumuz yok')+'</div></div>'+
+  (_ortakYetki
+   ?'<div class="kpi" data-act="go" data-arg="ortak" style="cursor:pointer"><div class="l">Ortaklardan Gelen ↗</div><div class="v">'+fmt0(sermayeTop+ortakCariTop)+'</div><div class="s">Sermaye '+fmt0(sermayeTop)+' · Ortak cari '+fmt0(ortakCariTop)+'</div></div>'
+   :'<div class="kpi"><div class="l">Kayıtlı Şirket</div><div class="v">'+rows.length+'</div><div class="s">erişim yetkiniz olan şirketler</div></div>')+
+ '</div>'+
+ (rows.length?'':'<div class="card"><div class="empty"><b>Görüntüleyebileceğiniz şirket yok</b>Merkez kasa yetkiniz var ancak hiçbir şirket için erişiminiz tanımlanmamış. Yöneticinizden şirket erişimi isteyin.</div></div>')+
+ (rows.length?'<div class="card"><h2>Şirket Hesapları <span class="tiny">merkezden yapılan ödemeler ve aktarımlar</span></h2>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Merkez Alacağı</th><th class="num">Şirketteki Ayna</th><th>Durum</th><th class="rowact"></th></tr></thead><tbody>'+
+  rows.map(function(r){
+   var durum=r.fark>0.01?'<span class="chip n">⚠ Uyuşmuyor ('+fmt0(r.fark)+')</span>':(r.m>0.01?'<span class="chip w">Şirket merkeze borçlu</span>':(r.m<-0.01?'<span class="chip g">Merkez şirkete borçlu</span>':'<span class="chip g">Kapalı</span>'));
+   return '<tr><td><b style="color:'+r.c.color+'">'+esc(r.c.name)+'</b></td>'+
+    '<td class="num" style="font-weight:700;color:'+(r.m>0?'var(--pos)':r.m<0?'var(--neg)':'var(--ink2)')+'">'+fmt0(Math.abs(r.m))+'</td>'+
+    '<td class="num">'+fmt0(r.k)+'</td><td>'+durum+'</td>'+
+    '<td class="rowact">'+
+     '<button class="btn sm out" data-act="merkezOdeForm" data-arg="'+r.c.id+'">💸 Şirket Adına Öde</button>'+
+     '<button class="btn sm gh" data-act="merkezAktarForm" data-arg="'+r.c.id+'">⇄ Nakit Aktar</button>'+
+     '<button class="btn sm in" data-act="merkezTahsilForm" data-arg="'+r.c.id+'">💰 Tahsilat</button>'+
+     '<button class="btn sm gh" data-act="merkezCoDetail" data-arg="'+r.c.id+'">📄 Ekstre</button>'+
+    '</td></tr>';}).join('')+
+  '<tr style="background:var(--acc-soft)"><td><b>TOPLAM</b></td><td class="num"><b>'+fmt0(toplamAlacak-toplamBorc)+'</b></td><td class="num"><b>'+fmt0(rows.reduce(function(s,r){return s+r.k;},0))+'</b></td><td colspan="2"></td></tr>'+
+  '</tbody></table></div>'+
+  '<p class="tiny" style="margin-top:8px">💸 <b>Şirket Adına Öde:</b> para merkezden çıkar, gider o şirketin kâr/zararına yazılır, şirket merkeze borçlanır. Bu ekrandan <b>doğrudan gider</b>, <b>şirketin carisine ödeme</b>, <b>personel maaş/avans/prim</b> ve <b>sabit ödeme (kira/vergi/SGK/fatura)</b> yapılabilir; merkez kredi kartıyla ödenen doğrudan giderler <b>taksite bölünebilir</b>. ⇄ <b>Nakit Aktar:</b> para merkezden şirketin kasasına geçer (gelir sayılmaz). 💰 <b>Tahsilat:</b> şirket merkeze ödeme yapar, borç düşer.</p></div>':'')+
+ merkezSetupCard()+
+ merkezSonIslemlerCard()+
+ merkezTaksitCard()+
+ merkezDagitimCard()+
+ '<div class="card"><h2>Merkez Kendi Giderleri <span class="tiny">son 30 gün</span></h2>'+
+  '<div class="grid g3"><div class="kpi n"><div class="l">Genel Yönetim Gideri</div><div class="v">'+fmt0(m30.gider)+'</div></div>'+
+  '<div class="kpi"><div class="l">Kalem Sayısı</div><div class="v">'+Object.keys(m30.byCat).length+'</div></div>'+
+  '<div class="kpi"><div class="l">En Büyük Kalem</div><div class="v" style="font-size:15px">'+esc((Object.keys(m30.byCat).sort(function(a,b){return m30.byCat[b]-m30.byCat[a];})[0])||'—')+'</div></div></div>'+
+  '<p class="tiny" style="margin-top:8px">Merkezin kendi personeli, kirası, muhasebe ücreti gibi giderleri buraya yazılır. Bunları şirketlere yansıtmak '+(isSuper()?'isterseniz yukarıdaki <b>“📊 Dönemi Dağıt”</b> düğmesini kullanın':'işlemini yalnızca süper yönetici yapabilir')+'; yansıtmazsanız merkezde kalır ve şirketlerin kâr/zararına girmez. Şirkete ait <b>tek bir</b> gideri merkezden ödediyseniz onun yolu <b>“Şirket Adına Öde”</b>dir.</p></div>';
+}
+
+function merkezSonIslemlerCard(){
+ var _ok={};merkezCos().forEach(function(c){var mc=findMerkezCari(c.id);if(mc)_ok[mc.id]=1;});
+ if(canAccessCo('ortak'))S.cari.forEach(function(c){if(c.co==='merkez'&&c.sys&&String(c.sys).indexOf('ortak:')===0)_ok[c.id]=1;});
+ var list=S.cariTxns.filter(function(t){return t.co==='merkez'&&t.ic&&!t.deletedAt&&_ok[t.cariId];})
+  .sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;}).slice(0,15);
+ if(!list.length)return '<div class="card"><h2>Son Grup İçi Hareketler</h2><div class="empty"><b>Henüz merkez işlemi yok</b>Yukarıdaki düğmelerle ilk ödemeyi veya aktarımı yapın.</div></div>';
+ return '<div class="card"><h2>Son Grup İçi Hareketler <span class="tiny">son 15 kayıt</span></h2><div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Hesap</th><th>Açıklama</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+
+  list.map(function(t){
+   var c=S.cari.find(function(x){return x.id===t.cariId;});
+   return '<tr><td>'+dTR(t.date)+'</td><td>'+esc(c?c.name:'—')+'</td><td>'+esc(t.desc||'')+' '+(icCount(t.icId)<3?'<span class="chip n" title="Bu işlemin karşı kayıtları eksik">⚠ eksik</span>':'')+'</td>'+
+    '<td class="num" style="color:'+(t.type==='borc'?'var(--neg)':'var(--pos)')+'">'+(t.type==='borc'?'−':'+')+fmt0(t.amount)+'</td>'+
+    '<td class="rowact">'+(t.icId?'<button class="btn sm gh" data-act="merkezDuzelt" data-arg="'+t.icId+'" title="İşlemi sil ve bilgileri dolu olarak yeniden aç">✎ Düzelt</button>':'')+'<button class="btn sm dng" data-act="del" data-arg="cariT~'+t.id+'">Sil</button></td></tr>';}).join('')+
+  '</tbody></table></div><p class="tiny" style="margin-top:8px"><b>✎ Düzelt:</b> yanlış girilen bir işlemi siler ve bilgileri dolu olarak yeniden açar — elle silip baştan yazmanıza gerek kalmaz. Bir kaydı sildiğinizde bu işlemin <b>her iki defterdeki tüm karşı kayıtları</b> birlikte çöp kutusuna gider; geri aldığınızda hepsi birlikte döner.</p></div>';
+}
+
+/* ---------- Şirket seçtirme (üst düğmeler) ---------- */
+function merkezOdeSec(){if(!merkezCoOpts().length){toast('⛔ Erişim yetkiniz olan şirket yok');return;}openForm('Hangi şirket adına ödeme yapılacak?',[{name:'co',label:'Şirket',type:'select',opts:merkezCoOpts(),req:1}],function(o){merkezOdeForm(o.co);});}
+function merkezAktarSec(){if(!merkezCoOpts().length){toast('⛔ Erişim yetkiniz olan şirket yok');return;}openForm('Hangi şirkete nakit aktarılacak?',[{name:'co',label:'Şirket',type:'select',opts:merkezCoOpts(),req:1}],function(o){merkezAktarForm(o.co);});}
+
+/* ================== T1/T4 — MERKEZDEN ŞİRKET ADINA ÖDEME ================== */
+function merkezOdeForm(coId,init){
+ if(merkezYetkiUyari(coId))return;
+ var caris=byCo(S.cari,coId).filter(function(c){return c.active!=='0'&&!c.sys;});
+ var staff=byCo(S.staff,coId).filter(function(x){return x.active!=='0';});
+ var fixs=byCo(S.fixed,coId);
+ openForm('🏛 Merkezden Ödeme — '+coName(coId),[
+  {name:'hedef',label:'Ödeme neyin karşılığı?',type:'select',req:1,opts:[
+   ['gider','📄 Doğrudan gider (fatura, harcama) — şirketin kâr/zararına yazılır'],
+   ['cari','🤝 Şirketin bir carisine ödeme — cari borcu kapanır (gider TEKRAR yazılmaz)'],
+   ['maas','👤 Şirketin personeline maaş / avans / prim'],
+   ['sabit','📅 Şirketin sabit ödemesi (kira / vergi / SGK / fatura)']],def:'gider'},
+  {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
+  {name:'method',label:'Merkezde hangi hesaptan / kartla ödendi?',type:'select',req:1,opts:payMethodOpts('merkez')},
+  {name:'taksit',label:'Taksit — yalnızca merkez KREDİ KARTI + “Doğrudan gider” seçiminde geçerlidir',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']],def:1},
+  {name:'cat',label:'Gider kategorisi (yalnızca “Doğrudan gider” için)',type:'select',opts:[['','— Seçin —']].concat(catOpts('gider'))},
+  {name:'cariId',label:'Cari (yalnızca “Carisine ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(caris.map(function(c){return [c.id,c.name];}))},
+  {row:[
+   {name:'staffId',label:'Personel (yalnızca “Personele ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(staff.map(function(s){return [s.id,s.name];}))},
+   {name:'stype',label:'Personel ödeme türü',type:'select',opts:[['maas','Maaş'],['avans','Avans'],['prim','Prim']],def:'maas'}]},
+  {row:[
+   {name:'fixedId',label:'Sabit ödeme tanımı (yalnızca “Sabit ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(fixs.map(function(f){return [f.id,(FTYPE[f.type]||'')+' · '+f.name];}))},
+   {name:'period',label:'Sabit ödeme dönemi',type:'month',def:monthISO()}]},
+  {name:'desc',label:'Açıklama',ph:'Fatura no / ödeme detayı...'}
+ ],function(o){
+  var amt=+o.amount;
+  if(!(amt>0)){toast('Tutar 0’dan büyük olmalı');return merkezOdeForm(coId,o);}
+  if(!o.method){toast('Merkezde hangi hesaptan ödendiğini seçin');return merkezOdeForm(coId,o);}
+  if(o.hedef==='gider'&&!o.cat){toast('Gider kategorisi seçin — kâr/zarar tablosunda hangi kaleme yazılacağı buradan belirlenir');return merkezOdeForm(coId,o);}
+  if(o.hedef==='cari'&&!o.cariId){toast('Hangi cariye ödeme yapıldığını seçin');return merkezOdeForm(coId,o);}
+  if(o.hedef==='maas'&&!o.staffId){toast('Hangi personele ödeme yapıldığını seçin');return merkezOdeForm(coId,o);}
+  var fx=null;
+  if(o.hedef==='sabit'){
+   if(!o.fixedId){toast('Hangi sabit ödeme tanımının ödendiğini seçin');return merkezOdeForm(coId,o);}
+   if(!o.period){toast('Sabit ödemenin dönemini seçin');return merkezOdeForm(coId,o);}
+   fx=S.fixed.find(function(x){return x.id===o.fixedId&&!x.deletedAt;});
+   if(!fx){toast('Sabit ödeme tanımı bulunamadı');return merkezOdeForm(coId,o);}
+   if(S.fixedLogs.some(function(l){return l.fixedId===o.fixedId&&l.period===o.period&&!l.deletedAt;})){
+    toast('⚠ '+mTR(o.period)+' dönemi için bu tanıma ait ödeme kaydı zaten var — mükerrer kayıt engellendi.');return;
+   }
+  }
+  var icId=nid(),isCard=String(o.method).indexOf('card:')===0,cardId=isCard?String(o.method).slice(5):'';
+  var N=+o.taksit||1;
+  if(N>1&&(!isCard||o.hedef!=='gider')){N=1;toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ödemelerinde uygulanır — bu kayıt tek çekim olarak işlendi');}
+  var cmc=coMerkezCari(coId),desc=o.desc||'';
+  /* --- MERKEZ tarafı: nakit/kart çıkışı + şirketten alacak (tam tutar, taksit bölünmez) --- */
+  merkezOdemeYaz({coId:coId,method:o.method,amount:amt,date:o.date,desc:desc,icId:icId,taksit:N,
+   mo:{hedef:o.hedef,cat:o.cat||'',cariId:o.cariId||'',staffId:o.staffId||'',stype:o.stype||'maas',fixedId:o.fixedId||'',period:o.period||'',taksit:N,desc:desc}});
+  var mcardId=isCard?(S.cardTxns.filter(function(x){return x.icId===icId;})[0]||{}).id:'';
+  /* --- ŞİRKET tarafı --- */
+  if(o.hedef==='cari'){
+   pushRec(S.cariTxns,{id:nid(),co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
+    desc:'🏛 Merkezden ödendi'+(desc?' — '+desc:''),nakit:'',accId:'',ic:true,icId:icId});
+  }else{
+   var stxId='',cat='',baseDesc='🏛 Merkezden ödendi'+(desc?' — '+desc:'');
+   if(o.hedef==='maas'){
+    stxId=nid();cat='Personel';
+    pushRec(S.staffTxns,{id:stxId,co:coId,staffId:o.staffId,type:o.stype||'maas',amount:amt,date:o.date,
+     accId:'',desc:baseDesc,ic:true,icId:icId});
+   }else if(o.hedef==='sabit'){
+    cat= fx.type==='kira'?'Kira': fx.type==='fatura'?'Fatura & Abonelik':'Vergi & SGK';
+    baseDesc='🏛 Merkezden ödendi — '+(FTYPE[fx.type]||'')+': '+fx.name+' ('+mTR(o.period)+')'+(desc?' — '+desc:'');
+    if(fx.cariId&&S.cari.find(function(x){return x.id===fx.cariId&&!x.deletedAt;})){
+     pushRec(S.cariTxns,{id:nid(),co:coId,cariId:fx.cariId,type:'borc',amount:amt,date:o.date,
+      desc:'Sabit ödeme (merkezden): '+fx.name+' ('+mTR(o.period)+')',nakit:'',accId:'',ic:true,icId:icId});
+    }
+   }else cat=o.cat;
+   var firstTxId='';
+   if(N<=1){
+    var tx={id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
+     src:isCard?'merkez-kart':'merkez',cat:cat,desc:baseDesc,ic:true,icId:icId};
+    if(mcardId)tx.cardTxnId=mcardId;
+    if(stxId)tx.staffTxnId=stxId;
+    firstTxId=tx.id;pushRec(S.txns,tx);
+   }else{
+    var per=Math.round((amt/N)*100)/100,acc=0;
+    for(var ti=0;ti<N;ti++){
+     var part=(ti===N-1)?Math.round((amt-acc)*100)/100:per; acc=Math.round((acc+per)*100)/100;
+     var tx2={id:nid(),co:coId,type:'gider',date:addMonthsClamped(o.date,ti),amount:part,accId:'',
+      src:'merkez-kart',cat:cat,taksitNo:(ti+1)+'/'+N,cardTxnId:mcardId,
+      desc:baseDesc+' (taksit '+(ti+1)+'/'+N+')',ic:true,icId:icId};
+     if(!firstTxId)firstTxId=tx2.id;
+     pushRec(S.txns,tx2);
+    }
+   }
+   if(o.hedef==='sabit'){
+    pushRec(S.fixedLogs,{id:nid(),co:coId,fixedId:o.fixedId,period:o.period,amount:amt,paidDate:o.date,txnId:firstTxId,ic:true,icId:icId});
+   }
+  }
+  pushRec(S.cariTxns,{id:nid(),co:coId,cariId:cmc.id,type:'alacak',amount:amt,date:o.date,
+   desc:'🏛 Merkez ödemesi'+(desc?' — '+desc:''),nakit:'',accId:'',ic:true,icId:icId});
+  try{logAudit('Merkez ödemesi',coName(coId)+' · '+fmt0(amt)+' · '+({gider:'gider',cari:'cari ödemesi',maas:'personel',sabit:'sabit ödeme'}[o.hedef])+(N>1?' · '+N+' taksit':''));}catch(e){}
+  save();
+  toast('✅ '+fmt0(amt)+' merkezden ödendi — '+coName(coId)+' merkeze borçlandı'+(N>1?' · gider '+N+' aya bölündü (aylık ~'+fmt0(amt/N)+')':''));
+  go(PAGE==='merkez'?'merkez':PAGE);
+ },init||{hedef:'gider',date:todayISO(),stype:'maas',taksit:1,period:monthISO()});
+ merkezOdeBind(coId);
+}
+
+/* ================== MERKEZ GENEL YÖNETİM GİDERİ DAĞITIMI ================== */
+function merkezDonemAralik(p){var y=+String(p).slice(0,4),m=+String(p).slice(5,7);return {from:p+'-01',to:clampDay(y,m,31)};}
+function merkezDonemGider(p){
+ var r=merkezDonemAralik(p),g=0,d=0;
+ S.txns.forEach(function(t){
+  if(t.co!=='merkez'||t.deletedAt||t.xfer||t.type==='virman')return;
+  if(t.date<r.from||t.date>r.to)return;
+  if(t.type==='gider'&&t.src!=='merkez-dagitim')g+=+t.amount;
+  else if(t.type==='gelir'&&t.src==='merkez-dagitim')d+=+t.amount;
+ });
+ g=Math.round(g*100)/100;d=Math.round(d*100)/100;
+ return {gider:g,dagitilan:d,kalan:Math.round((g-d)*100)/100};
+}
+function merkezDagitimForm(init){
+ if(!isSuper()){toast('⛔ Gider dağıtımı dönem sonu bir yönetim kararıdır — yalnızca süper yönetici yapabilir');return;}
+ var p=(init&&init.period)||monthISO();
+ var d0=merkezDonemGider(p);
+ openForm('📊 Merkez Giderlerini Şirketlere Dağıt',[
+  {name:'period',label:'Dönem — '+mTR(p)+' için dağıtılabilir kalan: '+fmt0(d0.kalan),type:'month',def:p,req:1},
+  {name:'anahtar',label:'Dağıtım anahtarı',type:'select',req:1,opts:[
+   ['ciro','📈 Ciroya göre — dönem geliri yüksek şirket daha çok pay alır (önerilen)'],
+   ['esit','⚖ Eşit olarak — her şirkete %25'],
+   ['manuel','✍ Elle oran gireceğim']]},
+  {row:COMPANIES.slice(0,2).map(function(c){return {name:'y_'+c.id,label:'% '+c.name+' (elle)',type:'number',step:'0.01'};})},
+  {row:COMPANIES.slice(2,4).map(function(c){return {name:'y_'+c.id,label:'% '+c.name+' (elle)',type:'number',step:'0.01'};})},
+  {name:'date',label:'Kayıt tarihi',type:'date',def:merkezDonemAralik(p).to,req:1}
+ ],function(o){
+  var per=o.period||p, d=merkezDonemGider(per);
+  if(d.kalan<=0.01){toast('⛔ '+mTR(per)+' döneminde dağıtılacak merkez gideri yok (toplam '+fmt0(d.gider)+', dağıtılan '+fmt0(d.dagitilan)+')');return;}
+  var w={},tot=0;
+  if(o.anahtar==='esit'){COMPANIES.forEach(function(c){w[c.id]=1;tot+=1;});}
+  else if(o.anahtar==='manuel'){COMPANIES.forEach(function(c){var v=+o['y_'+c.id]||0;w[c.id]=v;tot+=v;});
+   if(tot<=0){toast('Elle dağıtım için en az bir şirkete oran girin');return merkezDagitimForm(o);}}
+  else{var r=merkezDonemAralik(per);COMPANIES.forEach(function(c){var v=sumRange(c.id,r.from,r.to).gelir;w[c.id]=v;tot+=v;});
+   if(tot<=0){toast('⛔ Bu dönemde hiçbir şirketin cirosu yok — “Eşit olarak” veya “Elle” anahtarını seçin');return merkezDagitimForm(o);}}
+  var plan=[],acc=0,ci=0,liste=COMPANIES.filter(function(c){return w[c.id]>0;});
+  liste.forEach(function(c,i){
+   var pay=(i===liste.length-1)?Math.round((d.kalan-acc)*100)/100:Math.round((d.kalan*w[c.id]/tot)*100)/100;
+   acc=Math.round((acc+pay)*100)/100;
+   if(pay>0)plan.push({c:c,pay:pay,oran:w[c.id]/tot*100});
+  });
+  if(!plan.length){toast('Dağıtılacak pay hesaplanamadı');return;}
+  uiConfirm(mTR(per)+' dönemi merkez genel yönetim gideri '+fmt0(d.kalan)+' şu şekilde dağıtılacak:\n\n'+
+   plan.map(function(x){return '• '+x.c.name+': '+fmt0(x.pay)+'  (%'+x.oran.toFixed(1)+')';}).join('\n')+
+   '\n\nHer şirketin kâr/zararına bu tutar gider olarak yazılacak, merkeze borcu aynı tutarda artacak ve merkezin dönem gideri sıfırlanacak. İşlem geri alınabilir.',
+  function(){
+   ensureCat('gider','Genel Yönetim Payı');ensureCat('gelir','Genel Yönetim Dağıtımı');
+   var tarih=o.date||merkezDonemAralik(per).to;
+   plan.forEach(function(x){
+    var icId=nid(),mc=merkezCari(x.c.id),cmc=coMerkezCari(x.c.id),mctId=nid();
+    pushRec(S.cariTxns,{id:mctId,co:'merkez',cariId:mc.id,type:'borc',amount:x.pay,date:tarih,
+     desc:'Genel yönetim gideri payı ('+mTR(per)+')',nakit:'',accId:'',ic:true,icId:icId,allocPeriod:per});
+    pushRec(S.txns,{id:nid(),co:'merkez',type:'gelir',date:tarih,amount:x.pay,accId:'',src:'merkez-dagitim',
+     cat:'Genel Yönetim Dağıtımı',desc:'◀ '+x.c.name+' payı ('+mTR(per)+') — merkez gideri devredildi',
+     ic:true,icId:icId,allocPeriod:per,cariId:mc.id,cariTxnId:mctId});
+    pushRec(S.txns,{id:nid(),co:x.c.id,type:'gider',date:tarih,amount:x.pay,accId:'',src:'merkez-dagitim',
+     cat:'Genel Yönetim Payı',desc:'🏛 Merkez genel yönetim payı ('+mTR(per)+', %'+x.oran.toFixed(1)+')',
+     ic:true,icId:icId,allocPeriod:per});
+    pushRec(S.cariTxns,{id:nid(),co:x.c.id,cariId:cmc.id,type:'alacak',amount:x.pay,date:tarih,
+     desc:'🏛 Genel yönetim payı ('+mTR(per)+')',nakit:'',accId:'',ic:true,icId:icId,allocPeriod:per});
+   });
+   try{logAudit('Merkez gider dağıtımı',mTR(per)+' · '+fmt0(d.kalan)+' · '+o.anahtar);}catch(e){}
+   save();toast('✅ '+fmt0(d.kalan)+' '+plan.length+' şirkete dağıtıldı — merkezin '+mTR(per)+' dönem gideri sıfırlandı');
+   go('merkez');
+  },{title:'📊 Gider Dağıtımı Onayı',yes:'Evet, Dağıt'});
+ },init||{period:p,anahtar:'ciro',date:merkezDonemAralik(p).to});
+}
+function merkezDagitimCard(){
+ var p=monthISO(),d=merkezDonemGider(p),onc=[];
+ for(var i=1;i<=3;i++){var dt=new Date();dt.setDate(1);dt.setMonth(dt.getMonth()-i);
+  var pp=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');var dd=merkezDonemGider(pp);
+  if(dd.kalan>0.01)onc.push({p:pp,k:dd.kalan});}
+ return '<div class="card"><h2>📊 Genel Yönetim Gideri Dağıtımı <span class="tiny">merkezin kendi giderini şirketlere yansıtır</span></h2>'+
+  '<div class="grid g3">'+
+   '<div class="kpi n"><div class="l">'+mTR(p)+' Merkez Gideri</div><div class="v">'+fmt0(d.gider)+'</div></div>'+
+   '<div class="kpi p"><div class="l">Dağıtılan</div><div class="v">'+fmt0(d.dagitilan)+'</div></div>'+
+   '<div class="kpi a"><div class="l">Dağıtılmayı Bekleyen</div><div class="v">'+fmt0(d.kalan)+'</div></div>'+
+  '</div>'+
+  (onc.length?'<p class="tiny" style="margin-top:8px;color:var(--warn)"><b>⏳ Geçmiş dönemlerde de bekleyen var:</b> '+onc.map(function(x){return mTR(x.p)+' → '+fmt0(x.k);}).join(' · ')+'</p>':'')+
+  (isSuper()?'<div class="cardBtns" style="margin-top:12px"><button class="btn sm" data-act="merkezDagitimForm">📊 Dönemi Dağıt</button></div>':'<p class="tiny" style="margin-top:10px"><span class="chip w">🔒 Dağıtımı yalnızca süper yönetici yapabilir</span></p>')+
+  '<p class="tiny" style="margin-top:8px">Merkezin kirası, personeli, muhasebe ücreti gibi genel yönetim giderleri önce merkezde birikir. Dağıtım yaptığınızda bu tutar seçtiğiniz anahtara göre (ciro / eşit / elle) şirketlere gider olarak yazılır, şirketlerin merkeze borcu artar ve merkezin dönem gideri sıfırlanır — böylece grup kârı gerçek maliyeti yansıtır.</p></div>';
+}
+function merkezTaksitCard(){
+ var end=addMonthsClamped(todayISO(),12);
+ var ups=S.txns.filter(function(t){return !t.deletedAt&&t.src==='merkez-kart'&&t.taksitNo&&canAccessCo(t.co)&&t.date>todayISO()&&t.date<=end;})
+  .sort(function(a,b){return a.date<b.date?-1:1;});
+ if(!ups.length)return '';
+ var tot=ups.reduce(function(s2,t){return s2+ +t.amount;},0);
+ var byCoT={};ups.forEach(function(t){byCoT[t.co]=(byCoT[t.co]||0)+ +t.amount;});
+ return '<div class="card"><h2>📆 Merkez Kartı Gelecek Taksitler <span class="tiny">12 ay · toplam '+fmt0(tot)+'</span></h2>'+
+  '<div class="grid g4" style="margin-bottom:10px">'+COMPANIES.filter(function(c){return byCoT[c.id];}).map(function(c){
+   return '<div class="kpi"><div class="l">'+esc(c.name)+'</div><div class="v">'+fmt0(byCoT[c.id])+'</div></div>';}).join('')+'</div>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Şirket</th><th>Açıklama</th><th class="num">Tutar</th></tr></thead><tbody>'+
+  ups.slice(0,40).map(function(t){return '<tr><td>'+dTR(t.date)+'</td><td>'+esc(coName(t.co))+'</td><td>'+esc(String(t.desc||'').slice(0,60))+' <span class="chip w">'+esc(t.taksitNo)+'</span></td><td class="num">'+fmt(t.amount)+'</td></tr>';}).join('')+
+  '</tbody></table></div>'+(ups.length>40?'<div class="tiny" style="padding:6px">İlk 40 taksit gösteriliyor.</div>':'')+
+  '<p class="tiny" style="margin-top:8px">Kart borcunun tamamı merkezde durur; ilgili şirketin gideri ise taksit taksit kendi ayına yazılır. Şirketin merkeze borcu ilk günden tam tutar üzerinden doğar.</p></div>';
+}
+
+/* ================== T2 — MERKEZDEN ŞİRKETE NAKİT AKTARIM ================== */
+function merkezAktarForm(coId,init){
+ if(merkezYetkiUyari(coId))return;
+ var hedefAcc=byCo(S.accounts,coId).filter(function(a){return a.active!=='0';});
+ if(!hedefAcc.length){toast('⛔ '+coName(coId)+' şirketinde aktif kasa/banka hesabı yok — önce o şirkette hesap açın');return;}
+ openForm('⇄ Merkezden Nakit Aktarım — '+coName(coId),[
+  {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
+  {name:'fromAcc',label:'Merkezde çıkış hesabı',type:'select',req:1,opts:accOpts('merkez',1)},
+  {name:'toAcc',label:coName(coId)+' — para hangi hesaba girdi?',type:'select',req:1,opts:[['','— Seçin —']].concat(hedefAcc.map(function(a){return [a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name];}))},
+  {name:'desc',label:'Açıklama',ph:'Nakit desteği, işletme sermayesi...'}
+ ],function(o){
+  var amt=+o.amount;
+  if(!(amt>0)){toast('Tutar 0’dan büyük olmalı');return merkezAktarForm(coId,o);}
+  if(!o.fromAcc||!o.toAcc){toast('Hem merkezdeki çıkış hesabını hem şirketteki giriş hesabını seçin');return merkezAktarForm(coId,o);}
+  ensureCat('gider','Grup İçi');ensureCat('gelir','Grup İçi');
+  var icId=nid(),cmc=coMerkezCari(coId),desc=o.desc||'Nakit aktarım';
+  merkezOdemeYaz({coId:coId,method:o.fromAcc,amount:amt,date:o.date,desc:desc,icId:icId,mo:{tip:'aktar',toAcc:o.toAcc,desc:o.desc||''}});
+  var cctId=nid();
+  pushRec(S.cariTxns,{id:cctId,co:coId,cariId:cmc.id,type:'alacak',amount:amt,date:o.date,
+   desc:'🏛 Merkezden nakit aktarım'+(o.desc?' — '+o.desc:''),nakit:'gelir',accId:o.toAcc,ic:true,icId:icId});
+  pushRec(S.txns,{id:nid(),co:coId,type:'gelir',date:o.date,amount:amt,accId:o.toAcc,
+   cat:'Grup İçi',desc:'◀ Merkezden aktarım'+(o.desc?' — '+o.desc:''),xfer:true,ic:true,icId:icId,
+   cariId:cmc.id,cariTxnId:cctId});
+  try{logAudit('Merkez nakit aktarım',coName(coId)+' · '+fmt0(amt));}catch(e){}
+  save();
+  toast('✅ '+fmt0(amt)+' '+coName(coId)+' hesabına aktarıldı — gelir olarak SAYILMAZ, borç olarak izlenir');
+  go(PAGE);
+ },init||{date:todayISO()});
+ merkezAktarBind(coId);
+}
+
+/* ================== T3 — ŞİRKETTEN MERKEZE TAHSİLAT ================== */
+function merkezTahsilForm(coId,init){
+ if(merkezYetkiUyari(coId))return;
+ var kaynak=byCo(S.accounts,coId).filter(function(a){return a.active!=='0';});
+ if(!kaynak.length){toast('⛔ '+coName(coId)+' şirketinde aktif kasa/banka hesabı yok');return;}
+ var borc=coMerkezBorc(coId);
+ openForm('💰 Şirketten Merkeze Ödeme — '+coName(coId),[
+  {row:[{name:'amount',label:'Tutar (₺) · şu anki borç: '+fmt0(Math.max(0,borc)),type:'number',req:1,min:0.01,def:Math.max(0,Math.round(borc*100)/100)||''},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
+  {name:'fromAcc',label:coName(coId)+' — para hangi hesaptan çıktı?',type:'select',req:1,opts:[['','— Seçin —']].concat(kaynak.map(function(a){return [a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name];}))},
+  {name:'toAcc',label:'Merkezde hangi hesaba girdi?',type:'select',req:1,opts:accOpts('merkez',1)},
+  {name:'desc',label:'Açıklama',ph:'Merkez borcu ödemesi...'}
+ ],function(o){
+  var amt=+o.amount;
+  if(!(amt>0)){toast('Tutar 0’dan büyük olmalı');return merkezTahsilForm(coId,o);}
+  if(!o.fromAcc||!o.toAcc){toast('Her iki hesabı da seçin');return merkezTahsilForm(coId,o);}
+  ensureCat('gider','Grup İçi');ensureCat('gelir','Grup İçi');
+  var icId=nid(),mc=merkezCari(coId),cmc=coMerkezCari(coId),desc=o.desc||'Merkez borcu ödemesi';
+  var cctId=nid();
+  pushRec(S.cariTxns,{id:cctId,co:coId,cariId:cmc.id,type:'borc',amount:amt,date:o.date,desc:desc,
+   nakit:'gider',accId:o.fromAcc,ic:true,icId:icId});
+  pushRec(S.txns,{id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:o.fromAcc,
+   cat:'Grup İçi',desc:'▶ Merkeze ödeme — '+desc,xfer:true,ic:true,icId:icId,cariId:cmc.id,cariTxnId:cctId});
+  var mctId=nid();
+  pushRec(S.cariTxns,{id:mctId,co:'merkez',cariId:mc.id,type:'alacak',amount:amt,date:o.date,desc:coName(coId)+' — '+desc,
+   nakit:'gelir',accId:o.toAcc,ic:true,icId:icId,mo:{tip:'tahsil',fromAcc:o.fromAcc,desc:o.desc||''}});
+  pushRec(S.txns,{id:nid(),co:'merkez',type:'gelir',date:o.date,amount:amt,accId:o.toAcc,
+   cat:'Grup İçi',desc:'◀ '+coName(coId)+' — '+desc,xfer:true,ic:true,icId:icId,cariId:mc.id,cariTxnId:mctId});
+  try{logAudit('Merkez tahsilatı',coName(coId)+' · '+fmt0(amt));}catch(e){}
+  save();
+  toast('✅ '+fmt0(amt)+' merkeze ödendi — borç düşüldü');
+  go(PAGE);
+ },init||{date:todayISO()});
+ merkezTahsilBind(coId);
+}
+
+/* ---------- Merkez ⇄ şirket ekstresi ---------- */
+function merkezCoDetail(coId){
+ if(merkezYetkiUyari(coId))return;
+ var mc=findMerkezCari(coId);
+ if(!mc){toast('Bu şirketle henüz merkez hareketi yok');return;}
+ if(typeof cariDetail==='function')return cariDetail(mc.id);
+ toast('Ekstre açılamadı');
+}
+
+/* ================== ORTAKLAR ================== */
+function rOrtak(){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ S.partners=S.partners||[];
+ var ps=partnerList();
+ var sermayeTop=0,cariTop=0,cekisTop=0;
+ ps.forEach(function(p){sermayeTop+=ortakSermaye(p.id);cariTop+=ortakCariBal(p.id);cekisTop+=ortakCekis(p.id);});
+ var payTop=ps.reduce(function(s,p){return s+(+p.share||0);},0);
+ /* ortak katkılarının şirketlere oransal dağılımı */
+ var toplamKatki=sermayeTop+cariTop;
+ var coGiden=merkezCos().map(function(c){
+  var g=0;
+  S.cariTxns.forEach(function(t){if(t.co==='merkez'&&t.ic&&!t.deletedAt&&t.type==='borc'){var cc=S.cari.find(function(x){return x.id===t.cariId;});if(cc&&cc.sys==='co:'+c.id)g+=+t.amount;}});
+  return {c:c,g:g};
+ });
+ var gidenTop=coGiden.reduce(function(s,r){return s+r.g;},0);
+
+ document.getElementById('main').innerHTML= topbar('👥 Ortaklar & Sermaye',
+  '<button class="btn" data-act="ortakForm">＋ Ortak Ekle</button><button class="btn gh" data-act="ortakKarPayiForm">🎁 Kâr Payı Dağıt</button>')+
+ (Math.abs(payTop-100)>0.01&&ps.length?'<div class="card" style="margin-bottom:12px;padding:10px 14px"><span class="chip w">⚠ Hisse oranları toplamı %'+payTop.toFixed(1)+' — %100 olmalı</span></div>':'')+
+ '<div class="grid g4" style="margin-bottom:16px">'+
+  '<div class="kpi a"><div class="l">Toplam Sermaye</div><div class="v">'+fmt0(sermayeTop)+'</div><div class="s">'+ps.length+' ortak</div></div>'+
+  '<div class="kpi p"><div class="l">Ortak Cari (borcumuz)</div><div class="v">'+fmt0(cariTop)+'</div><div class="s">ortakların çekebileceği</div></div>'+
+  '<div class="kpi n"><div class="l">Ödenen Kâr Payı / Çekiş</div><div class="v">'+fmt0(cekisTop)+'</div><div class="s">kümülatif</div></div>'+
+  '<div class="kpi"><div class="l">Ortaklardan Gelen Toplam</div><div class="v">'+fmt0(toplamKatki)+'</div><div class="s">sermaye + ortak cari</div></div>'+
+ '</div>'+
+ (ps.length?'<div class="grid g2">'+ps.map(function(p){
+   var col=hashColor(p.name),ser=ortakSermaye(p.id),oc=ortakCariBal(p.id),ck=ortakCekis(p.id),net=ser+oc;
+   var beklenen=payTop>0?toplamKatki*(+p.share||0)/payTop:0;
+   var sapma=beklenen?((ser+oc)-beklenen):0;
+   return '<div class="card accCard" style="--ac:'+col+'">'+
+    '<div class="accHead"><span class="avat" style="background:'+col+'">'+esc(String(p.name||'?').charAt(0).toUpperCase())+'</span>'+
+     '<div><b>'+esc(p.name)+'</b><div class="tiny">'+esc(p.note||'Ortak')+'</div></div>'+
+     '<span class="chip p" style="margin-left:auto">%'+(+p.share||0)+'</span></div>'+
+    '<div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">'+
+     '<div><div class="tiny">Sermaye</div><b style="font-size:16px">'+fmt0(ser)+'</b></div>'+
+     '<div><div class="tiny">Ortak Cari</div><b style="font-size:16px;color:'+(oc>0?'var(--pos)':oc<0?'var(--neg)':'var(--ink2)')+'">'+fmt0(oc)+'</b></div>'+
+     '<div><div class="tiny">Çektiği (kâr payı)</div><b style="font-size:16px;color:var(--neg)">'+fmt0(ck)+'</b></div>'+
+    '</div>'+
+    '<div class="accBal" style="margin-top:10px"><div><div class="tiny">NET POZİSYON <span title="Sermaye + Ortak Cari — şirketin ortağa karşı toplam yükümlülüğü">ⓘ</span></div>'+
+     '<b style="font-size:20px">'+fmt0(net)+'</b>'+
+     (Math.abs(sapma)>1?'<div class="tiny" style="color:'+(sapma<0?'var(--warn)':'var(--ink3)')+'">'+(sapma<0?'▼ hissesine göre '+fmt0(-sapma)+' eksik koydu':'▲ hissesine göre '+fmt0(sapma)+' fazla koydu')+'</div>':'<div class="tiny">hissesiyle uyumlu</div>')+
+     '</div></div>'+
+    '<div class="cardBtns">'+
+     '<button class="btn sm in" data-act="ortakGirisForm" data-arg="'+p.id+'">💰 Para Girişi</button>'+
+     '<button class="btn sm out" data-act="ortakOdemeForm" data-arg="'+p.id+'">💸 Ortağa Ödeme</button>'+
+     '<button class="btn sm gh" data-act="ortakEkstre" data-arg="'+p.id+'">📄 Ekstre</button>'+
+     '<button class="btn sm gh" data-act="ortakForm" data-arg="'+p.id+'">✎</button>'+
+     '<button class="btn sm dng" data-act="ortakSil" data-arg="'+p.id+'">Sil</button>'+
+    '</div></div>';}).join('')+'</div>'
+  :'<div class="card"><div class="empty"><b>Henüz ortak tanımlı değil</b>“＋ Ortak Ekle” ile ortakları ve hisse oranlarını girin; sermaye ve ortak cari hareketleri burada izlenir.</div></div>')+
+ (gidenTop?'<div class="card"><h2>Ortak Katkılarının Şirketlere Dağılımı <span class="tiny">oransal — para ayrıştırılamaz olduğu için hisseye göre dağıtılmıştır</span></h2>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Merkezden Giden Toplam</th>'+ps.map(function(p){return '<th class="num">'+esc(p.name)+'</th>';}).join('')+'</tr></thead><tbody>'+
+  coGiden.map(function(r){return '<tr><td><b style="color:'+r.c.color+'">'+esc(r.c.name)+'</b></td><td class="num">'+fmt0(r.g)+'</td>'+
+   ps.map(function(p){var pay=payTop>0?(+p.share||0)/payTop:0;return '<td class="num">'+fmt0(r.g*pay)+'</td>';}).join('')+'</tr>';}).join('')+
+  '<tr style="background:var(--acc-soft)"><td><b>TOPLAM</b></td><td class="num"><b>'+fmt0(gidenTop)+'</b></td>'+ps.map(function(p){var pay=payTop>0?(+p.share||0)/payTop:0;return '<td class="num"><b>'+fmt0(gidenTop*pay)+'</b></td>';}).join('')+'</tr>'+
+  '</tbody></table></div><p class="tiny" style="margin-top:8px">Para kasada karıştığı için “hangi ortağın parası hangi şirkete gitti” kesin olarak ayrıştırılamaz; bu tablo hisse oranlarına göre <b>oransal</b> bir dağıtımdır ve ortaklar arası mutabakat için kullanılır.</p></div>':'')+
+ '<div class="card"><h2>ℹ️ Sermaye mi, Ortak Cari mi?</h2><div style="overflow-x:auto"><table><thead><tr><th></th><th>Sermaye</th><th>Ortak Cari</th></tr></thead><tbody>'+
+  '<tr><td><b>Ne demek</b></td><td>Ortak parayı kalıcı olarak koydu</td><td>Ortak şirkete borç verdi</td></tr>'+
+  '<tr><td><b>Geri ödenir mi</b></td><td>Hayır (sermaye azaltımı gerekir)</td><td>Evet, istediğinde çekebilir</td></tr>'+
+  '<tr><td><b>Karşılığı</b></td><td>Hisse oranı ve kâr payı hakkı</td><td>Şirketin ortağa borcu</td></tr>'+
+  '</tbody></table></div><p class="tiny" style="margin-top:8px">⚠ Ortaktan gelen para <b>hiçbir zaman gelir sayılmaz</b> — kasaya girer ama kâr/zarar tablosuna yazılmaz. Aksi halde olmayan bir kâr görünür ve vergi hesabınız yanlış çıkar.</p></div>';
+}
+
+function ortakForm(id){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ S.partners=S.partners||[];
+ var init=id?partnerById(id):{share:0};
+ openForm(id?'Ortak Düzenle':'Yeni Ortak',[
+  {name:'name',label:'Ad Soyad / Unvan',req:1,ph:'Ör: ERDİNÇ ÇELEBİOĞLU'},
+  {row:[{name:'share',label:'Hisse oranı (%)',type:'number',step:'0.01',def:0},{name:'phone',label:'Telefon'}]},
+  {name:'note',label:'Not',ph:'Ör: kurucu ortak'}
+ ],function(o){
+  if(id){Object.assign(init,o);stampUpdate(init,init);
+   ['sermaye','cari','dagitim'].forEach(function(k){var c=findOrtakCari(id,k);if(c)c.name=o.name+' — '+OKIND_LBL[k];});
+  }else{pushRec(S.partners,{id:nid(),co:'merkez',name:o.name,share:+o.share||0,phone:o.phone||'',note:o.note||''});}
+  save();toast('Ortak kaydedildi');go('ortak');
+ },init||{});
+}
+function ortakCariCascade(pid,undo){ /* ortak sistem carileri + hareketleri + nakit eşleri birlikte gider/döner */
+ var now=new Date().toISOString(),by=SESSION?SESSION.username:'';
+ var mark=function(r){ if(undo){delete r.deletedAt;delete r.deletedBy;} else if(!r.deletedAt){r.deletedAt=now;r.deletedBy=by;} };
+ var ids=[];
+ S.cari.forEach(function(c){ if(c.sys&&String(c.sys).indexOf('ortak:'+pid+':')===0){ mark(c); ids.push(c.id); } });
+ var ctIds=[];
+ S.cariTxns.forEach(function(t){ if(ids.indexOf(t.cariId)>-1){ mark(t); ctIds.push(t.id); } });
+ [S.txns,S.cardTxns].forEach(function(arr){ arr.forEach(function(t){ if(t.cariTxnId&&ctIds.indexOf(t.cariTxnId)>-1) mark(t); }); });
+}
+function ortakSil(id){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ var p=partnerById(id);if(!p)return;
+ var net=ortakNet(id),ck=ortakCekis(id);
+ if(Math.abs(net)>0.01||ck>0.01){toast('⛔ '+p.name+' hesabında hareket var (net '+fmt0(net)+') — önce bakiyeyi sıfırlayın, sonra silin');return;}
+ uiConfirm(p.name+' ortak kaydı silinsin mi? (Çöp kutusuna taşınır, 30 gün içinde geri getirilebilir)',function(){
+  softDelete(S.partners,id,'partner',function(r){return 'Ortak: '+r.name;});
+  ortakCariCascade(id,false);
+  save();toast('Ortak çöp kutusuna taşındı');go('ortak');
+ },{danger:1,title:'Silme Onayı',yes:'Evet, Sil'});
+}
+function ortakEkstre(id){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ var p=partnerById(id);if(!p)return;
+ var ids={};['sermaye','cari','dagitim'].forEach(function(k){var c=findOrtakCari(id,k);if(c)ids[c.id]=OKIND_LBL[k];});
+ var list=S.cariTxns.filter(function(t){return ids[t.cariId]&&!t.deletedAt;}).sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+ var run=0;
+ var rows=list.map(function(t){
+  var d=(t.type==='alacak'?1:-1)*+t.amount; run+=d;
+  return '<tr><td>'+dTR(t.date)+'</td><td>'+esc(ids[t.cariId])+'</td><td>'+esc(t.desc||'')+'</td>'+
+   '<td class="num" style="color:'+(d>0?'var(--pos)':'var(--neg)')+'">'+(d>0?'+':'−')+fmt0(Math.abs(d))+'</td>'+
+   '<td class="num"><b>'+fmt0(run)+'</b></td>'+
+   '<td class="rowact"><button class="btn sm dng" data-act="del" data-arg="cariT~'+t.id+'">Sil</button></td></tr>';}).join('');
+ document.getElementById('main').innerHTML= topbar('📄 Ortak Ekstresi — '+p.name,
+  '<button class="btn gh" data-act="go" data-arg="ortak">← Ortaklar</button>')+
+ '<div class="grid g4" style="margin-bottom:16px">'+
+  '<div class="kpi a"><div class="l">Sermaye</div><div class="v">'+fmt0(ortakSermaye(id))+'</div></div>'+
+  '<div class="kpi p"><div class="l">Ortak Cari</div><div class="v">'+fmt0(ortakCariBal(id))+'</div></div>'+
+  '<div class="kpi n"><div class="l">Çektiği</div><div class="v">'+fmt0(ortakCekis(id))+'</div></div>'+
+  '<div class="kpi"><div class="l">Net Pozisyon</div><div class="v">'+fmt0(ortakNet(id))+'</div></div>'+
+ '</div>'+
+ '<div class="card"><h2>Hareketler <span class="tiny">'+list.length+' kayıt</span></h2>'+
+  (list.length?'<div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Hesap</th><th>Açıklama</th><th class="num">Tutar</th><th class="num">Yürüyen</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+   :'<div class="empty"><b>Hareket yok</b>Ortaklar ekranından “Para Girişi” ile ilk kaydı oluşturun.</div>')+
+  '<div class="cardBtns" style="margin-top:12px"><button class="btn sm in" data-act="ortakGirisForm" data-arg="'+id+'">💰 Para Girişi</button><button class="btn sm out" data-act="ortakOdemeForm" data-arg="'+id+'">💸 Ortağa Ödeme</button></div></div>';
+ PAGE='ortak';
+}
+
+/* --- O1: Ortaktan merkeze para girişi --- */
+function ortakGirisForm(pid,init){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ var p=partnerById(pid);if(!p){toast('Ortak bulunamadı');return;}
+ if(!byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).length){toast('⛔ Merkezde aktif kasa/banka hesabı yok — önce Banka & Kasa ekranından hesap açın');return;}
+ openForm('💰 Ortaktan Para Girişi — '+p.name,[
+  {name:'kind',label:'Bu para ne olarak kaydedilsin?',type:'select',req:1,opts:[
+   ['sermaye','🏛 SERMAYE — kalıcı katkı, hisse karşılığı (geri ödenmez)'],
+   ['cari','🤝 ORTAK CARİ — ortağın şirkete verdiği borç (istediğinde çekebilir)']],def:'cari'},
+  {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
+  {name:'accId',label:'Para merkezde hangi hesaba girdi?',type:'select',req:1,opts:accOpts('merkez',1)},
+  {name:'desc',label:'Açıklama',ph:'Sermaye artırımı, nakit destek...'}
+ ],function(o){
+  var amt=+o.amount;
+  if(!(amt>0)){toast('Tutar 0’dan büyük olmalı');return ortakGirisForm(pid,o);}
+  if(!o.accId){toast('Paranın girdiği hesabı seçin');return ortakGirisForm(pid,o);}
+  ensureCat('gelir','Ortak / Sermaye');
+  var icId=nid(),oc=ortakCari(pid,o.kind==='sermaye'?'sermaye':'cari'),octId=nid();
+  pushRec(S.cariTxns,{id:octId,co:'merkez',cariId:oc.id,type:'alacak',amount:amt,date:o.date,
+   desc:(o.kind==='sermaye'?'Sermaye katkısı':'Ortak borcu')+(o.desc?' — '+o.desc:''),
+   nakit:'gelir',accId:o.accId,eq:true,ic:true,icId:icId});
+  pushRec(S.txns,{id:nid(),co:'merkez',type:'gelir',date:o.date,amount:amt,accId:o.accId,
+   cat:'Ortak / Sermaye',desc:'👤 '+p.name+' — '+(o.kind==='sermaye'?'sermaye':'ortak cari')+(o.desc?' — '+o.desc:''),
+   xfer:true,eq:true,ic:true,icId:icId,cariId:oc.id,cariTxnId:octId});
+  try{logAudit('Ortak para girişi',p.name+' · '+fmt0(amt)+' · '+(o.kind==='sermaye'?'sermaye':'ortak cari'));}catch(e){}
+  save();
+  toast('✅ '+fmt0(amt)+' kaydedildi — GELİR olarak sayılmadı, '+(o.kind==='sermaye'?'sermayeye':'ortak carisine')+' yazıldı');
+  go('ortak');
+ },init||{kind:'cari',date:todayISO()});
+ ortakGirisBind(pid);
+}
+
+/* --- O2: Merkezden ortağa ödeme --- */
+function ortakOdemeForm(pid,init){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ var p=partnerById(pid);if(!p){toast('Ortak bulunamadı');return;}
+ if(!byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).length){toast('⛔ Merkezde aktif kasa/banka hesabı yok');return;}
+ openForm('💸 Ortağa Ödeme — '+p.name,[
+  {name:'reason',label:'Ödemenin sebebi',type:'select',req:1,opts:[
+   ['iade','↩ Borç iadesi — ortak carisinden düşülür'],
+   ['karpayi','🎁 Kâr payı ödemesi — kümülatif çekiş olarak izlenir'],
+   ['cekis','👤 Ortak çekişi (kişisel harcama) — ortak borçlanır']],def:'iade'},
+  {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
+  {name:'accId',label:'Merkezde hangi hesaptan ödendi?',type:'select',req:1,opts:accOpts('merkez',1)},
+  {name:'desc',label:'Açıklama'}
+ ],function(o){
+  var amt=+o.amount;
+  if(!(amt>0)){toast('Tutar 0’dan büyük olmalı');return ortakOdemeForm(pid,o);}
+  if(!o.accId){toast('Ödemenin yapıldığı hesabı seçin');return ortakOdemeForm(pid,o);}
+  var kind=o.reason==='karpayi'?'dagitim':'cari';
+  ensureCat('gider','Ortak / Sermaye');
+  var icId=nid(),oc=ortakCari(pid,kind),octId=nid();
+  var lbl={iade:'Borç iadesi',karpayi:'Kâr payı ödemesi',cekis:'Ortak çekişi'}[o.reason];
+  pushRec(S.cariTxns,{id:octId,co:'merkez',cariId:oc.id,type:'borc',amount:amt,date:o.date,
+   desc:lbl+(o.desc?' — '+o.desc:''),nakit:'gider',accId:o.accId,eq:true,ic:true,icId:icId});
+  pushRec(S.txns,{id:nid(),co:'merkez',type:'gider',date:o.date,amount:amt,accId:o.accId,
+   cat:'Ortak / Sermaye',desc:'👤 '+p.name+' — '+lbl+(o.desc?' — '+o.desc:''),
+   xfer:true,eq:true,ic:true,icId:icId,cariId:oc.id,cariTxnId:octId});
+  try{logAudit('Ortağa ödeme',p.name+' · '+fmt0(amt)+' · '+lbl);}catch(e){}
+  save();
+  toast('✅ '+fmt0(amt)+' ödendi — GİDER olarak sayılmadı, '+lbl.toLowerCase()+' olarak izleniyor');
+  go('ortak');
+ },init||{reason:'iade',date:todayISO()});
+ ortakOdemeBind(pid);
+}
+
+/* ================== MERKEZ TUTARLILIK DENETİMLERİ ================== */
+function merkezChecks(){
+ if(!canAccessCo('merkez'))return [];
+ var out=[],A=function(title,detail,pg,items){if(items.length)out.push({title:title,detail:detail,pg:pg,n:items.length,items:items});};
+ /* 1) Yarım kalmış merkez işlemi */
+ var grp={};
+ [S.txns,S.cariTxns,S.cardTxns,S.staffTxns].forEach(function(arr){arr.forEach(function(r){
+  if(!r.icId)return;var g=grp[r.icId]=grp[r.icId]||{a:[],d:0};if(r.deletedAt)g.d++;else g.a.push(r);});});
+ var yarim=[];
+ Object.keys(grp).forEach(function(k){var g=grp[k];if(g.a.length&&g.d>0)yarim=yarim.concat(g.a);}); /* yaşayan VE silinmiş kayıt bir arada → grup yarım kalmış */
+ A('Yarım kalmış merkez işlemi','Bir grup içi işlemin kayıtlarından bazıları silinmiş, bazıları duruyor — iki defter arasındaki denge bozulur. 🔧 ile kalan kayıtlar çöp kutusuna taşınır.','merkez',yarim);
+ /* 2) Ayna bakiye uyuşmazlığı */
+ var ayna=[];
+ merkezCos().forEach(function(c){
+  var m=merkezCoBal(c.id),k=coMerkezBorc(c.id);
+  if(Math.abs(m-k)>0.01)ayna.push({id:'ayna-'+c.id,co:c.id,name:c.name,fark:m-k});
+ });
+ A('Ayna bakiye uyuşmazlığı','Merkezin şirketten alacağı ile şirketin merkeze borcu eşit değil — bir tarafta kayıt silinmiş ya da elle değiştirilmiş olabilir.','merkez',ayna);
+ /* 3) Ortak hareketi gelir/gider olarak işlenmiş */
+ var sysIds={};S.cari.forEach(function(c){if(c.sys&&String(c.sys).indexOf('ortak:')===0)sysIds[c.id]=1;});
+ var eqBad=S.txns.filter(function(t){
+  if(t.deletedAt||t.co!=='merkez')return false;
+  var isOrtak=t.eq||(t.cariId&&sysIds[t.cariId])||t.cat==='Ortak / Sermaye';
+  return isOrtak&&!t.xfer;});
+ if(!canAccessCo('ortak'))eqBad=[];
+ A('Ortak hareketi gelir/gider olarak işlenmiş','Ortak/sermaye hareketi kâr-zarar tablosuna girmiş — olmayan bir kâr ya da gider gösterir. Bu kayıtlar “transfer” olarak işaretlenmeliydi.','ortak',eqBad);
+ /* 4) Grup içi kayıt eleme bayrağı eksik */
+ var icBad=S.cariTxns.filter(function(t){
+  if(t.deletedAt||!t.cariId)return false;
+  var c=S.cari.find(function(x){return x.id===t.cariId;});
+  return c&&c.sys&&String(c.sys).indexOf('ortak:')!==0&&!t.ic;});
+ A('Grup içi işaret eksik kayıt','Merkez hesabına ait bir hareket “grup içi” olarak işaretlenmemiş — grup raporunda çifte sayılabilir.','merkez',icBad);
+ return out;
+}
+
+/* ==================================================================================
+   v36 — MERKEZ KASA KULLANIM İYİLEŞTİRMELERİ
+   Amaç: personel hatasını azaltmak. Dinamik formlar (yalnızca gerekli alanlar),
+   otomatik tutar doldurma, KAYIT ÖNCESİ CANLI ÖNİZLEME, bakiye/limit/mükerrer
+   uyarıları, bağlı hesapların elle bozulmasının engellenmesi ve tek tuşla düzeltme.
+   ================================================================================== */
+
+/* ---------- Form yardımcıları (openForm sonrası bağlanır) ---------- */
+function fldEl(name){return document.querySelector('#mForm [name="'+name+'"]');}
+function fldBox(name){var e=fldEl(name);return e&&e.closest?e.closest('.fld'):null;}
+function fldShow(name,on){var b=fldBox(name);if(b)b.style.display=on?'':'none';}
+function fldVal(name){var e=fldEl(name);return e?e.value:'';}
+function fldAuto(name,v){ /* kullanıcı elle yazdıysa üzerine YAZMAZ */
+ var e=fldEl(name);if(!e)return;
+ if(e.value===''||e.value===e.dataset.autoval){e.value=String(v);e.dataset.autoval=String(v);}
+}
+function formNote(html){
+ var box=document.getElementById('mForm');if(!box)return;
+ var el=document.getElementById('mNote');
+ if(!el){el=document.createElement('div');el.id='mNote';el.className='mNote';box.appendChild(el);}
+ el.innerHTML=html;
+}
+function formBind(fn){
+ var box=document.getElementById('mForm');if(!box)return;
+ var h=function(){try{fn();}catch(e){}};
+ box.addEventListener('change',h);box.addEventListener('input',h);
+ h();
+}
+function nvPrev(title,rows,warns){ /* önizleme kutusu HTML'i */
+ return '<div class="nvTitle">🔎 '+esc(title)+'</div>'+
+  '<ul class="nvList">'+rows.map(function(r){return '<li>'+r+'</li>';}).join('')+'</ul>'+
+  (warns&&warns.length?'<div class="nvWarn">'+warns.map(function(w){return '<div>⚠ '+w+'</div>';}).join('')+'</div>':'');
+}
+function accNameOf(id){var a=S.accounts.find(function(x){return x.id===id;});return a?((a.type==='kasa'?'💵 ':'🏦 ')+a.name):'—';}
+function cardNameOf(id){var c=S.cards.find(function(x){return x.id===id;});return c?('💳 '+c.name):'—';}
+/* aynı gün / aynı şirket / aynı tutar → mükerrer kayıt şüphesi */
+function merkezMukerrer(coId,amount,date,icIdHaric){
+ var mc=findMerkezCari(coId);if(!mc)return 0;
+ return S.cariTxns.filter(function(t){
+  return t.co==='merkez'&&t.cariId===mc.id&&!t.deletedAt&&t.type==='borc'&&
+   t.date===date&&Math.abs(+t.amount-(+amount||0))<0.01&&(!icIdHaric||t.icId!==icIdHaric);}).length;
+}
+
+/* ---------- MERKEZDEN ÖDEME: dinamik alanlar + önizleme ---------- */
+function merkezOdeBind(coId){
+ formBind(function(){
+  var hedef=fldVal('hedef'),method=fldVal('method'),isCard=String(method).indexOf('card:')===0;
+  var cardId=isCard?String(method).slice(5):'',accId=isCard?'':method;
+  fldShow('cat',hedef==='gider');
+  fldShow('cariId',hedef==='cari');
+  fldShow('staffId',hedef==='maas');fldShow('stype',hedef==='maas');
+  fldShow('fixedId',hedef==='sabit');fldShow('period',hedef==='sabit');
+  fldShow('taksit',hedef==='gider'&&isCard);
+  /* otomatik tutar */
+  if(hedef==='sabit'){var fx=S.fixed.find(function(x){return x.id===fldVal('fixedId');});if(fx&&+fx.amount>0)fldAuto('amount',fx.amount);}
+  if(hedef==='maas'&&fldVal('stype')==='maas'){var st=S.staff.find(function(x){return x.id===fldVal('staffId');});if(st&&+st.salary>0)fldAuto('amount',st.salary);}
+  /* önizleme */
+  var amt=parseAmt(fldVal('amount'))||0,date=fldVal('date')||todayISO(),N=+fldVal('taksit')||1;
+  if(!(hedef==='gider'&&isCard))N=1;
+  var rows=[],warns=[];
+  if(isCard){
+   var c=S.cards.find(function(x){return x.id===cardId;});
+   var yeni=(c?cardDebt(c):0)+amt;
+   rows.push('<b>Merkez</b> '+esc(cardNameOf(cardId))+' kart borcu <b>+'+fmt0(amt)+'</b> → yeni borç <b>'+fmt0(yeni)+'</b>');
+   if(c&&+c.limit>0&&yeni>+c.limit)warns.push('Kart limiti aşılıyor (limit '+fmt0(c.limit)+', yeni borç '+fmt0(yeni)+')');
+  }else if(accId){
+   var a=S.accounts.find(function(x){return x.id===accId;});
+   var kalan=(a?accBalance(a):0)-amt;
+   rows.push('<b>Merkez</b> '+esc(accNameOf(accId))+' <b class="nvNeg">−'+fmt0(amt)+'</b> → kalan <b>'+fmt0(kalan)+'</b>');
+   if(kalan<0)warns.push('Merkez hesabı eksiye düşecek ('+fmt0(kalan)+') — doğru hesabı seçtiğinizden emin olun');
+  }else warns.push('Merkezde hangi hesaptan/kartla ödendiğini seçin');
+  if(hedef==='cari'){
+   var cr=S.cari.find(function(x){return x.id===fldVal('cariId');});
+   if(cr){var yb=cariBalance(cr)+amt;
+    rows.push('<b>'+esc(coName(coId))+'</b> · '+esc(cr.name)+' cari borcu kapanıyor: '+fmt0(cariBalance(cr))+' → <b>'+fmt0(yb)+'</b>');
+    rows.push('Gider <b>TEKRAR yazılmaz</b> (fatura girildiğinde zaten yazılmıştı)');
+    if(yb>0.01)warns.push(esc(cr.name)+' bu ödemeden sonra BİZE '+fmt0(yb)+' borçlu görünecek — fazla ödeme yapıyor olabilirsiniz');
+   }else warns.push('Hangi cariye ödeme yapıldığını seçin');
+  }else if(hedef==='maas'){
+   var stf=S.staff.find(function(x){return x.id===fldVal('staffId');});
+   if(stf)rows.push('<b>'+esc(coName(coId))+'</b> · '+esc(stf.name)+' → '+({maas:'Maaş',avans:'Avans',prim:'Prim'}[fldVal('stype')]||'')+' <b>'+fmt0(amt)+'</b> (Personel gideri)');
+   else warns.push('Hangi personele ödeme yapıldığını seçin');
+  }else if(hedef==='sabit'){
+   var fx2=S.fixed.find(function(x){return x.id===fldVal('fixedId');});
+   if(fx2){
+    rows.push('<b>'+esc(coName(coId))+'</b> · '+esc((FTYPE[fx2.type]||'')+': '+fx2.name)+' → <b>'+fmt0(amt)+'</b> gider ('+esc(mTR(fldVal('period')||monthISO()))+' dönemi "Ödendi ✓" olur)');
+    if(fx2.cariId&&S.cari.find(function(x){return x.id===fx2.cariId&&!x.deletedAt;}))rows.push('Tanımdaki cariye de işlenecek: '+esc((S.cari.find(function(x){return x.id===fx2.cariId;})||{}).name||''));
+    if(S.fixedLogs.some(function(l){return l.fixedId===fx2.id&&l.period===(fldVal('period')||monthISO())&&!l.deletedAt;}))warns.push('Bu dönem için ödeme kaydı ZATEN VAR — kaydetmeye çalışırsanız engellenir');
+   }else warns.push('Hangi sabit ödeme tanımının ödendiğini seçin');
+  }else{
+   if(fldVal('cat'))rows.push('<b>'+esc(coName(coId))+'</b> · '+esc(fldVal('cat'))+' gideri <b>+'+fmt0(amt)+'</b>'+(N>1?' → <b>'+N+' taksite bölünür</b> (aylık ~'+fmt0(amt/N)+')':'')+' — şirketin kasasına <b>dokunulmaz</b>');
+   else warns.push('Gider kategorisi seçin');
+  }
+  var eski=coMerkezBorc(coId);
+  rows.push('<b>'+esc(coName(coId))+' → Merkeze borç:</b> '+fmt0(eski)+' → <b>'+fmt0(eski+amt)+'</b>');
+  if(!(amt>0))warns.push('Tutar girin');
+  var mk=merkezMukerrer(coId,amt,date);
+  if(mk&&amt>0)warns.push('DİKKAT: '+dTR(date)+' tarihinde '+esc(coName(coId))+' için aynı tutarda ('+fmt0(amt)+') '+mk+' ödeme zaten kayıtlı — mükerrer giriş yapıyor olabilirsiniz');
+  formNote(nvPrev('Kaydedince ne olacak?',rows,warns));
+ });
+}
+
+/* ---------- NAKİT AKTARIM / TAHSİLAT önizlemeleri ---------- */
+function merkezAktarBind(coId){
+ formBind(function(){
+  var amt=parseAmt(fldVal('amount'))||0,fa=fldVal('fromAcc'),ta=fldVal('toAcc');
+  var rows=[],warns=[];
+  if(fa){var a=S.accounts.find(function(x){return x.id===fa;});var k=(a?accBalance(a):0)-amt;
+   rows.push('<b>Merkez</b> '+esc(accNameOf(fa))+' <b class="nvNeg">−'+fmt0(amt)+'</b> → kalan <b>'+fmt0(k)+'</b>');
+   if(k<0)warns.push('Merkez hesabı eksiye düşecek ('+fmt0(k)+')');
+  }else warns.push('Merkezde çıkış hesabını seçin');
+  if(ta){var a2=S.accounts.find(function(x){return x.id===ta;});
+   rows.push('<b>'+esc(coName(coId))+'</b> '+esc(accNameOf(ta))+' <b class="nvPos">+'+fmt0(amt)+'</b> → yeni bakiye <b>'+fmt0((a2?accBalance(a2):0)+amt)+'</b>');
+  }else warns.push('Şirkette giriş hesabını seçin');
+  rows.push('Bu para <b>GELİR SAYILMAZ</b> — kâr/zarar tablosuna girmez');
+  var eski=coMerkezBorc(coId);
+  rows.push('<b>'+esc(coName(coId))+' → Merkeze borç:</b> '+fmt0(eski)+' → <b>'+fmt0(eski+amt)+'</b>');
+  if(!(amt>0))warns.push('Tutar girin');
+  formNote(nvPrev('Kaydedince ne olacak?',rows,warns));
+ });
+}
+function merkezTahsilBind(coId){
+ formBind(function(){
+  var amt=parseAmt(fldVal('amount'))||0,fa=fldVal('fromAcc'),ta=fldVal('toAcc');
+  var rows=[],warns=[],borc=coMerkezBorc(coId);
+  if(fa){var a=S.accounts.find(function(x){return x.id===fa;});var k=(a?accBalance(a):0)-amt;
+   rows.push('<b>'+esc(coName(coId))+'</b> '+esc(accNameOf(fa))+' <b class="nvNeg">−'+fmt0(amt)+'</b> → kalan <b>'+fmt0(k)+'</b>');
+   if(k<0)warns.push('Şirket hesabı eksiye düşecek ('+fmt0(k)+')');
+  }else warns.push('Şirkette çıkış hesabını seçin');
+  if(ta){var a2=S.accounts.find(function(x){return x.id===ta;});
+   rows.push('<b>Merkez</b> '+esc(accNameOf(ta))+' <b class="nvPos">+'+fmt0(amt)+'</b> → yeni bakiye <b>'+fmt0((a2?accBalance(a2):0)+amt)+'</b>');
+  }else warns.push('Merkezde giriş hesabını seçin');
+  rows.push('<b>'+esc(coName(coId))+' → Merkeze borç:</b> '+fmt0(borc)+' → <b>'+fmt0(borc-amt)+'</b>');
+  rows.push('Bu ödeme <b>GİDER SAYILMAZ</b> — sadece borç kapanır');
+  if(!(amt>0))warns.push('Tutar girin');
+  if(amt>borc+0.01)warns.push('Borçtan FAZLA ödeme yapıyorsunuz (borç '+fmt0(borc)+') — fark merkezin şirkete borcu olarak görünecek');
+  formNote(nvPrev('Kaydedince ne olacak?',rows,warns));
+ });
+}
+function ortakGirisBind(pid){
+ formBind(function(){
+  var amt=parseAmt(fldVal('amount'))||0,kind=fldVal('kind'),acc=fldVal('accId');
+  var rows=[],warns=[],p=partnerById(pid)||{};
+  if(acc){var a=S.accounts.find(function(x){return x.id===acc;});
+   rows.push('<b>Merkez</b> '+esc(accNameOf(acc))+' <b class="nvPos">+'+fmt0(amt)+'</b> → yeni bakiye <b>'+fmt0((a?accBalance(a):0)+amt)+'</b>');
+  }else warns.push('Paranın girdiği hesabı seçin');
+  if(kind==='sermaye')rows.push('<b>'+esc(p.name||'')+'</b> · Sermaye: '+fmt0(ortakSermaye(pid))+' → <b>'+fmt0(ortakSermaye(pid)+amt)+'</b> <span class="nvMut">(kalıcı katkı, geri ödenmez)</span>');
+  else rows.push('<b>'+esc(p.name||'')+'</b> · Ortak Cari: '+fmt0(ortakCariBal(pid))+' → <b>'+fmt0(ortakCariBal(pid)+amt)+'</b> <span class="nvMut">(ortak istediğinde çekebilir)</span>');
+  rows.push('Bu para <b>GELİR SAYILMAZ</b> — kâr/zarar tablosuna girmez');
+  if(!(amt>0))warns.push('Tutar girin');
+  formNote(nvPrev('Kaydedince ne olacak?',rows,warns));
+ });
+}
+function ortakOdemeBind(pid){
+ formBind(function(){
+  var amt=parseAmt(fldVal('amount'))||0,r=fldVal('reason'),acc=fldVal('accId');
+  var rows=[],warns=[],p=partnerById(pid)||{};
+  if(acc){var a=S.accounts.find(function(x){return x.id===acc;});var k=(a?accBalance(a):0)-amt;
+   rows.push('<b>Merkez</b> '+esc(accNameOf(acc))+' <b class="nvNeg">−'+fmt0(amt)+'</b> → kalan <b>'+fmt0(k)+'</b>');
+   if(k<0)warns.push('Merkez hesabı eksiye düşecek ('+fmt0(k)+')');
+  }else warns.push('Ödemenin yapıldığı hesabı seçin');
+  if(r==='karpayi')rows.push('<b>'+esc(p.name||'')+'</b> · Çektiği (kâr payı): '+fmt0(ortakCekis(pid))+' → <b>'+fmt0(ortakCekis(pid)+amt)+'</b>');
+  else{var yeni=ortakCariBal(pid)-amt;
+   rows.push('<b>'+esc(p.name||'')+'</b> · Ortak Cari: '+fmt0(ortakCariBal(pid))+' → <b>'+fmt0(yeni)+'</b>');
+   if(r==='iade'&&amt>ortakCariBal(pid)+0.01)warns.push('Ortağın alacağından FAZLA iade yapıyorsunuz (alacağı '+fmt0(ortakCariBal(pid))+') — fark ortağın şirkete borcu olarak görünecek');
+  }
+  rows.push('Bu ödeme <b>GİDER SAYILMAZ</b>');
+  if(!(amt>0))warns.push('Tutar girin');
+  formNote(nvPrev('Kaydedince ne olacak?',rows,warns));
+ });
+}
+
+/* ---------- TEK TUŞLA DÜZELTME: grup içi işlemi sil + formu dolu aç ---------- */
+function merkezDuzelt(icId){
+ var mct=S.cariTxns.find(function(t){return t.icId===icId&&t.co==='merkez'&&!t.deletedAt;});
+ if(!mct){toast('Düzeltilecek işlem bulunamadı');return;}
+ var cr=S.cari.find(function(x){return x.id===mct.cariId;});
+ var coId=cr&&cr.sys&&String(cr.sys).indexOf('co:')===0?String(cr.sys).slice(3):'';
+ if(!coId){toast('Bu işlem şirket hesabına bağlı değil — düzeltmek için silip yeniden girin');return;}
+ if(merkezYetkiUyari(coId))return;
+ var mo=mct.mo||{};
+ uiConfirm('Bu işlemin HER İKİ defterdeki tüm kayıtları silinecek ve bilgileri dolu olarak yeni bir form açılacak. Düzeltip kaydettiğinizde işlem yeniden oluşur. Devam edilsin mi?',
+ function(){
+  icCascade(icId);
+  try{logAudit('Merkez işlemi düzeltiliyor',coName(coId)+' · '+fmt0(mct.amount));}catch(e){}
+  save();
+  var init={amount:mct.amount,date:mct.date,desc:mo.desc||mct.desc||'',
+   method:mct.cardId?('card:'+mct.cardId):(mct.accId||''),
+   hedef:mo.hedef||'gider',cat:mo.cat||'',cariId:mo.cariId||'',staffId:mo.staffId||'',
+   stype:mo.stype||'maas',fixedId:mo.fixedId||'',period:mo.period||monthISO(),taksit:mo.taksit||1};
+  if(mo.tip==='aktar'){merkezAktarForm(coId,{amount:mct.amount,date:mct.date,fromAcc:mct.accId||'',toAcc:mo.toAcc||'',desc:mo.desc||''});return;}
+  if(mo.tip==='tahsil'){merkezTahsilForm(coId,{amount:mct.amount,date:mct.date,fromAcc:mo.fromAcc||'',toAcc:mct.accId||'',desc:mo.desc||''});return;}
+  merkezOdeForm(coId,init);
+ },{title:'✎ İşlemi Düzelt',yes:'Evet, Düzelt'});
+}
+
+/* ---------- ORTAKLARA HİSSEYE GÖRE KÂR PAYI DAĞITIMI ---------- */
+function ortakKarPayiForm(init){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ var ps=partnerList();
+ if(!ps.length){toast('Önce ortak tanımlayın');return;}
+ var payTop=ps.reduce(function(s,p){return s+(+p.share||0);},0);
+ if(payTop<=0){toast('⛔ Ortakların hisse oranları girilmemiş — önce ✎ ile hisse yüzdelerini girin');return;}
+ openForm('🎁 Ortaklara Kâr Payı Dağıt',[
+  {row:[{name:'amount',label:'Dağıtılacak TOPLAM tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
+  {name:'accId',label:'Merkezde hangi hesaptan ödenecek?',type:'select',req:1,opts:accOpts('merkez',1)},
+  {name:'desc',label:'Açıklama',ph:'2026 dönem kâr payı'}
+ ],function(o){
+  var amt=+o.amount;
+  if(!(amt>0)){toast('Tutar 0’dan büyük olmalı');return ortakKarPayiForm(o);}
+  if(!o.accId){toast('Ödemenin yapılacağı hesabı seçin');return ortakKarPayiForm(o);}
+  var plan=[],acc=0;
+  ps.forEach(function(p,i){
+   var pay=(i===ps.length-1)?Math.round((amt-acc)*100)/100:Math.round((amt*(+p.share||0)/payTop)*100)/100;
+   acc=Math.round((acc+pay)*100)/100;
+   if(pay>0)plan.push({p:p,pay:pay});
+  });
+  uiConfirm('Toplam '+fmt0(amt)+' kâr payı hisse oranlarına göre dağıtılacak:\n\n'+
+   plan.map(function(x){return '• '+x.p.name+' (%'+(+x.p.share||0)+'): '+fmt0(x.pay);}).join('\n')+
+   '\n\nMerkez kasasından bu tutar çıkacak, her ortağın "Çektiği" bakiyesi artacak. Kâr payı GİDER olarak sayılmaz.',
+  function(){
+   ensureCat('gider','Ortak / Sermaye');
+   plan.forEach(function(x){
+    var icId=nid(),oc=ortakCari(x.p.id,'dagitim'),octId=nid();
+    pushRec(S.cariTxns,{id:octId,co:'merkez',cariId:oc.id,type:'borc',amount:x.pay,date:o.date,
+     desc:'Kâr payı ödemesi'+(o.desc?' — '+o.desc:''),nakit:'gider',accId:o.accId,eq:true,ic:true,icId:icId});
+    pushRec(S.txns,{id:nid(),co:'merkez',type:'gider',date:o.date,amount:x.pay,accId:o.accId,
+     cat:'Ortak / Sermaye',desc:'👤 '+x.p.name+' — kâr payı'+(o.desc?' — '+o.desc:''),
+     xfer:true,eq:true,ic:true,icId:icId,cariId:oc.id,cariTxnId:octId});
+   });
+   try{logAudit('Kâr payı dağıtımı',fmt0(amt)+' · '+plan.length+' ortak');}catch(e){}
+   save();toast('✅ '+fmt0(amt)+' kâr payı '+plan.length+' ortağa dağıtıldı');go('ortak');
+  },{title:'🎁 Kâr Payı Dağıtımı',yes:'Evet, Dağıt'});
+ },init||{date:todayISO()});
+ formBind(function(){
+  var amt=parseAmt(fldVal('amount'))||0,acc=fldVal('accId'),rows=[],warns=[];
+  if(acc){var a=S.accounts.find(function(x){return x.id===acc;});var k=(a?accBalance(a):0)-amt;
+   rows.push('<b>Merkez</b> '+esc(accNameOf(acc))+' <b class="nvNeg">−'+fmt0(amt)+'</b> → kalan <b>'+fmt0(k)+'</b>');
+   if(k<0)warns.push('Merkez hesabı eksiye düşecek ('+fmt0(k)+')');
+  }else warns.push('Ödeme hesabını seçin');
+  ps.forEach(function(p){rows.push('<b>'+esc(p.name)+'</b> (%'+(+p.share||0)+') → <b>'+fmt0(amt*(+p.share||0)/payTop)+'</b>');});
+  if(Math.abs(payTop-100)>0.01)warns.push('Hisse oranları toplamı %'+payTop.toFixed(1)+' — %100 olmalı; dağıtım yine de bu oranlara göre yapılır');
+  if(!(amt>0))warns.push('Tutar girin');
+  formNote(nvPrev('Kaydedince ne olacak?',rows,warns));
+ });
+}
+
+/* ---------- MERKEZ BOŞ DURUM REHBERİ ---------- */
+function merkezSetupCard(){
+ var accs=byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';});
+ var cards=byCo(S.cards,'merkez').filter(function(c){return c.active!=='0';});
+ var ps=canAccessCo('ortak')?partnerList():[];
+ var eksik=[];
+ if(!accs.length)eksik.push({t:'Merkezin kasası / banka hesabı yok',d:'Merkezden ödeme ve aktarım yapabilmek için en az bir hesap gerekir.',b:'＋ Hesap Ekle',a:'accForm',pg:'acc'});
+ if(!cards.length)eksik.push({t:'Merkezin kredi kartı tanımlı değil',d:'Kartla ödeme yapacaksanız ekleyin; yapmayacaksanız bu adımı atlayabilirsiniz.',b:'＋ Kart Ekle',a:'cardForm',pg:'card'});
+ if(canAccessCo('ortak')&&!ps.length)eksik.push({t:'Ortak tanımlı değil',d:'Ortakların koyduğu sermayeyi ve çektikleri parayı izlemek için ortakları ve hisse oranlarını girin.',b:'＋ Ortak Ekle',a:'ortakForm',pg:'ortak'});
+ if(!eksik.length)return '';
+ return '<div class="card" style="border-left:4px solid var(--warn)"><h2>🚀 Kuruluma Devam Edin <span class="tiny">'+eksik.length+' adım kaldı</span></h2>'+
+  '<div style="display:grid;gap:10px">'+eksik.map(function(x){
+   return '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:var(--acc-soft);border-radius:12px">'+
+    '<div style="flex:1;min-width:200px"><b style="font-size:13px">'+esc(x.t)+'</b><div class="tiny">'+esc(x.d)+'</div></div>'+
+    '<button class="btn sm" data-act="'+x.a+'">'+esc(x.b)+'</button></div>';}).join('')+'</div></div>';
+}
+
+/* ---------- ŞİRKET TARAFI: MERKEZ HESABI KARTI (işlem düğmeleriyle) ---------- */
+function merkezDashCard(co){
+ if(co==='grup'||co==='merkez')return '';
+ var c=findCoMerkezCari(co);
+ if(!c)return '';
+ var borc=coMerkezBorc(co),ayna=merkezCoBal(co),fark=Math.abs(borc-ayna);
+ var son=S.cariTxns.filter(function(t){return t.cariId===c.id&&!t.deletedAt;}).sort(function(a,b){return a.date<b.date?1:-1;}).slice(0,3);
+ var yetki=canAccessCo('merkez');
+ var end=addMonthsClamped(todayISO(),12);
+ var tak=S.txns.filter(function(t){return t.co===co&&!t.deletedAt&&t.src==='merkez-kart'&&t.taksitNo&&t.date>todayISO()&&t.date<=end;});
+ var takTop=tak.reduce(function(s,t){return s+ +t.amount;},0);
+ return '<div class="card" style="margin-bottom:12px;border-left:4px solid #0c6b58">'+
+  '<h2>🏛 Merkez Hesabı '+(fark>0.01?'<span class="chip n">⚠ Merkezle uyuşmuyor ('+fmt0(fark)+')</span>':'<span class="chip g">✓ Merkezle uyumlu</span>')+'</h2>'+
+  '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end">'+
+   '<div><div class="tiny">Merkeze borcumuz</div><b style="font-size:22px;color:'+(borc>0?'var(--neg)':borc<0?'var(--pos)':'var(--ink2)')+'">'+fmt0(Math.abs(borc))+'</b><div class="tiny">'+(borc>0?'merkez bizim adımıza ödeme yaptı':borc<0?'merkez bize borçlu':'hesap kapalı')+'</div></div>'+
+   (takTop?'<div><div class="tiny">Merkez kartı taksitleri (12 ay)</div><b style="font-size:18px">'+fmt0(takTop)+'</b><div class="tiny">'+tak.length+' taksit</div></div>':'')+
+   '<div style="flex:1;min-width:180px">'+(son.length?'<div class="tiny">Son hareketler</div>'+son.map(function(t){return '<div class="tiny">'+dTR(t.date)+' · '+esc(String(t.desc||'').slice(0,42))+' · <b>'+(t.type==='alacak'?'+':'−')+fmt0(t.amount)+'</b></div>';}).join(''):'<div class="tiny">Henüz hareket yok</div>')+'</div>'+
+  '</div>'+
+  '<div class="cardBtns" style="margin-top:10px">'+
+   '<button class="btn sm gh" data-act="cariDetail" data-arg="'+c.id+'">📄 Ekstre</button>'+
+   (yetki&&borc>0.01?'<button class="btn sm in" data-act="merkezTahsilForm" data-arg="'+co+'">💰 Merkeze Ödeme Yap</button>':'')+
+   (yetki?'<button class="btn sm gh" data-act="coJump" data-arg="merkez">🏛 Merkez Kasa ekranına git</button>':'')+
+  '</div>'+
+  '<p class="tiny" style="margin-top:8px">Merkezden bu şirket adına yapılan ödemeler burada borç olarak birikir. Bu hesaba <b>elle hareket eklenemez</b> — tüm kayıtlar Merkez Kasa ekranından otomatik oluşur, böylece iki defter her zaman birbirini tutar.'+
+  (fark>0.01?' <b class="nvNeg">Şu an bir uyuşmazlık var</b> — Ayarlar → Sistem Tutarlılık Denetimi ekranından inceleyin.':'')+'</p></div>';
+}

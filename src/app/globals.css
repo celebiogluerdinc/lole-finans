@@ -348,3 +348,22 @@ th,.kpi .l{font-size:var(--fs-2xs)}
 
 /* v34: sol menü SVG ikonlar */
 .ic svg{width:1.15em;height:1.15em;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-2px}
+
+/* ===== v33 — ŞİRKET MERKEZİ (Merkez Kasa & Ortaklar) ===== */
+body[data-co=merkez]{--acc:#0b5f6b;--acc2:#12889a;--acc-soft:#0b5f6b14}
+body[data-co=merkez] .coSwitch .dot{background:#0b5f6b}
+/* Merkez rozeti — şirket defterindeki "Merkez Hesabı" kartı için */
+.mrkChip{display:inline-flex;align-items:center;gap:5px;background:#0c6b5814;color:#0c6b58;border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:700}
+/* Ortak kartı sayı ızgarası dar ekranda taşmasın */
+.ortakGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+
+/* ===== v36 — FORM İÇİ CANLI ÖNİZLEME (kayıt öncesi "ne olacak?") ===== */
+.mNote{margin-top:14px;padding:12px 14px;border-radius:12px;background:linear-gradient(160deg,var(--acc-soft),transparent);border:1px solid var(--line);font-size:12.5px;line-height:1.65}
+.mNote .nvTitle{font-weight:800;font-size:12px;letter-spacing:.02em;color:var(--ink2);margin-bottom:6px}
+.mNote .nvList{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.mNote .nvList li{padding-left:16px;position:relative;color:var(--ink)}
+.mNote .nvList li:before{content:"›";position:absolute;left:4px;top:0;color:var(--acc);font-weight:800}
+.mNote .nvWarn{margin-top:8px;padding:8px 10px;border-radius:9px;background:#c2403c14;border:1px solid #c2403c33;color:#a8322f;font-weight:600;display:grid;gap:4px}
+.mNote .nvPos{color:var(--pos)}
+.mNote .nvNeg{color:var(--neg)}
+.mNote .nvMut{color:var(--ink3);font-weight:400}
