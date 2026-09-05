@@ -247,8 +247,39 @@ function fixState(j){ // eksik alanları tamamla (sürüm geçişleri veri kaybe
 }
 var READONLY=false; // A7: bağlantı hatasında salt-okunur mod — eski yedek/seed CANLI verinin üzerine asla otomatik yazılmaz
 var lastCloudRev=null; // B1: buluttaki ana kaydın bilinen son updated_at değeri (CAS/fencing token)
+/* v42: Supabase "yetki reddedildi" (süresi dolmuş oturum) hatasını AĞ hatasından ayırır.
+   Eskiden ikisi de "Bulut bağlantısı kurulamadı" diyordu ve kullanıcı ağını/sunucusunu boşuna
+   kontrol ediyordu; oysa tek yapması gereken çıkış yapıp yeniden girmekti. */
+function isAuthErr(e){
+ try{
+  if(!e)return false;
+  var st=e.status||e.statusCode||(e.originalError&&e.originalError.status)||0;
+  if(st===401||st===403)return true;
+  var t=((e.code||'')+' '+(e.message||'')+' '+(e.hint||'')+' '+(e.details||'')).toLowerCase();
+  return /jwt|token|expired|unauthor|not authenticated|permission denied|row-level|rls|pgrst301|pgrst302|invalid claim|api key/.test(t);
+ }catch(x){return false;}
+}
+function reAuth(){ /* oturumu kapat, giriş ekranına dön */
+ try{ if(window.__loleBoot&&window.__loleBoot.signOut){window.__loleBoot.signOut();return;} }catch(e){}
+ try{ localStorage.clear(); }catch(e){}
+ try{ location.reload(); }catch(e){}
+}
+function showAuthBanner(){
+ try{
+  var old=document.getElementById('roBanner'); if(old)old.remove();
+  if(document.getElementById('authBanner'))return;
+  var d=document.createElement('div');
+  d.id='authBanner';d.setAttribute('role','alert');
+  d.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#8a5a00;color:#fff;padding:10px 14px;font:600 13px system-ui;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap';
+  d.innerHTML='🔑 <b>Oturumunuz sona ermiş</b> — sunucuya bağlanılıyor ama kimliğiniz doğrulanamıyor, bu yüzden hiçbir değişiklik kaydedilmez. Verileriniz güvende. '+
+   '<button data-act="reAuth" style="background:#fff;color:#8a5a00;border:0;border-radius:8px;padding:6px 12px;font-weight:700;cursor:pointer">↻ Çıkış Yap ve Yeniden Gir</button>'+
+   '<span style="opacity:.85;font-weight:400">Bu düğme sorunu çözmezse tarayıcıda bu sitenin verilerini silip tekrar girin.</span>';
+  document.body.appendChild(d);
+ }catch(e){}
+}
 function showReadonlyBanner(){
  try{
+  if(document.getElementById('authBanner'))return; /* v42: oturum bandı zaten varsa üstüne yazma */
   if(document.getElementById('roBanner'))return;
   var d=document.createElement('div');
   d.id='roBanner';d.setAttribute('role','alert');
@@ -272,11 +303,14 @@ async function loadState(){
   if(attempt<2) await new Promise(res=>setTimeout(res,700*(attempt+1)));
  }
  if(!a&&lastErr){ // A7: BAĞLANTI HATASI — yedek/seed'i canlı verinin üzerine YAZMA; salt-okunur başla
-  loadSource='BAĞLANTI HATASI ('+(((lastErr&&lastErr.message)||lastErr)+'').slice(0,80)+') — salt-okunur';
+  var _auth=isAuthErr(lastErr); /* v42 */
+  loadSource=(_auth?'OTURUM HATASI (':'BAĞLANTI HATASI (')+(((lastErr&&lastErr.message)||lastErr)+'').slice(0,120)+') — salt-okunur';
   READONLY=true;
   S=fixState(EMBEDDED_SEED?JSON.parse(JSON.stringify(EMBEDDED_SEED)):blankState());
-  setTimeout(showReadonlyBanner,300);
-  setTimeout(()=>toast('⚠ Buluta bağlanılamadı — uygulama SALT-OKUNUR modda açıldı. Bağlantı gelince "Yeniden Dene" ile tazeleyin.'),500);
+  setTimeout(_auth?showAuthBanner:showReadonlyBanner,300);
+  setTimeout(()=>toast(_auth
+   ?'🔑 Oturumunuz sona ermiş — sunucu çalışıyor ama kimliğiniz doğrulanamadı. Üstteki "Çıkış Yap ve Yeniden Gir" düğmesine basın.'
+   :'⚠ Buluta bağlanılamadı — uygulama SALT-OKUNUR modda açıldı. Bağlantı gelince "Yeniden Dene" ile tazeleyin.'),500);
   return;
  }
  if(!a){ // sorgu başarılı ama ana kayıt yok/bozuk → buluttaki tarihli yedeklerin en yenisini dene
@@ -508,17 +542,23 @@ function attemptCloudSave(tryNo){ // B1: CAS'lı kayıt. KURAL (FAIL-OPEN): sür
   updateSaveBadge();
   checkStorageWarning();
  }
- function onFail(){
+ function onFail(err){
   pendingSaves=Math.max(0,pendingSaves-1);
   lastSaveFailed=true;
   updateSaveBadge();
+  if(typeof isAuthErr==='function'&&isAuthErr(err)){ /* v42: kaydetme sırasında oturum düşerse doğru mesaj */
+   try{showAuthBanner();}catch(e){}
+   if(!saveErr){saveErr=true;toast('🔑 Kaydedilemedi — oturumunuz sona ermiş. Üstteki "Çıkış Yap ve Yeniden Gir" düğmesine basın; girdiğiniz son bilgiyi tekrar girmeniz gerekebilir.');}
+   return;
+  }
   if(!saveErr){saveErr=true;toast('⚠ Bulut kaydı başarısız! Ayarlar > Yedek İndir ile verinizi hemen dışa alın.');}
  }
  function plainSet(){ // eski (v17) yol — CAS kullanılamıyorsa/başarısızsa yazma aynen devam eder
-  withTimeout(window.storage.set(skey(),j,isTeam()),8000).then(function(res){
+  var _lastSetErr=null;
+  withTimeout(Promise.resolve(window.storage.set(skey(),j,isTeam())).catch(function(e){_lastSetErr=e;return null;}),8000).then(function(res){
    if(res)onOk(null);
    else if(tryNo<2)setTimeout(function(){attemptCloudSave(tryNo+1);},800*(tryNo+1));
-   else onFail();
+   else onFail(_lastSetErr);
   });
  }
  function resolveSaveConflict(current){ // gerçek çakışma: uzakla birleştir, en fazla 3 tur yeniden dene; olmadı kullanıcıya sor

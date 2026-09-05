@@ -1,6 +1,17 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v42  (05.09.2026)  Oturum hatasi ayrimi + guncellemeler aninda geliyor
+     - Supabase "yetki reddedildi" (suresi dolmus oturum) hatasi artik AG hatasindan
+       ayriliyor. Eskiden ikisi de "Bulut baglantisi kurulamadi" diyordu ve kullanici
+       agini/sunucusunu bosuna kontrol ediyordu.
+       Yeni sari bant: "Oturumunuz sona ermis" + tek tusluk "Cikis Yap ve Yeniden Gir".
+       Kaydetme sirasinda oturum duserse de ayni dogru mesaj cikiyor.
+     - Service worker: uygulama dosyalari (/ ve /engine.js) artik ONCE AGDAN aliniyor.
+       Eskiden yeni surum ancak BIR SONRAKI acilista geliyordu ("Ctrl+F5 yaptim ama
+       degismedi" sikayetinin sebebi). Cevrimdisi acilis calismaya devam ediyor.
+     16 yeni test + mevcut 423 = 439 otomatik test gecti.
+
 v41  (05.09.2026)  MASTER DENETIM - 16 duzeltme
      Denetim kurulu: baskan + 8 denetci (4 finans, 4 yazilim) + 5 dogrulayici.
      91 bulgu incelendi, 16 duzeltme uygulandi.
