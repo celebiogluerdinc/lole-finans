@@ -1617,11 +1617,18 @@ function addTxnForm(type,init){
  openForm(type==='gelir'?'Gelir Ekle':'Gider Ekle',[
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'cat',label:'Kategori',type:'select',opts:catOpts(type),req:1},
-  {name:'accId',label:type==='gelir'?'Hangi hesaba girdi':'Hangi hesaptan çıktı',type:'select',opts:accOpts(CO),req:1},
+  {name:'accId',label:type==='gelir'?'Hangi hesaba girdi':'Hangi hesaptan çıktı (ya da 🏛 merkez öder)',type:'select',opts:(type==='gider'&&typeof merkezOpts==='function')?accOpts(CO).concat(merkezOpts(CO)):accOpts(CO),req:1},
   {name:'cariId',label:'Cari (opsiyonel — seçerseniz bu para hareketi cari bakiyesine tahsilat/ödeme olarak işlenir)',type:'select',opts:cariOpts(CO)},
   {row:[{name:'vat',label:'KDV %',type:'select',opts:[['','KDV yok'],['1','%1'],['10','%10'],['20','%20']]},{name:'doc',label:'Belge no'}]},
   {name:'desc',label:'Açıklama',ph:'Ör: Sebze hali alımı'}
  ],o=>{
+  if(type==='gider'&&isMerkezMethod(o.accId)){ /* v40: gideri şirket merkezi ödedi */
+   if(isEdit){ toast('⛔ Mevcut bir kaydı merkez ödemesine çeviremezsiniz — kaydı silip yeniden girin, ya da Merkez Kasa ekranındaki "✎ Düzelt" düğmesini kullanın'); return; }
+   if(!(+o.amount>0)){ toast('Tutar girin'); return; }
+   if(!o.cat){ toast('Kategori seçin'); return; }
+   if(merkezIcerdenOde(CO,{hedef:'gider',cat:o.cat,cariId:o.cariId||'',vat:o.vat||'',amount:+o.amount,date:o.date,desc:o.desc||'',method:merkezMethodOf(o.accId)},'Gider kaydedildi'))go(PAGE==='tx'?'tx':'dash');
+   return;
+  }
   const rec={id:isEdit?init.id:nid(),co:CO,type,...o,amount:+o.amount};
   /* v14-A1: "Cari" alanı eskiden yalnızca kayda yazılıyor, hiçbir yerde okunmuyordu (ölü alan).
      Artık cari seçilirse karşı hareket üretilir: gelir → 'alacak' (müşterinin borcu azalır / tahsilat),
@@ -2025,13 +2032,20 @@ function cariTxnForm(cariId,defType,init){
   {name:'type',label:'İşlem',type:'select',opts:[['borc','Borçlandır (satış yaptık / alacağımız arttı)'],['alacak','Alacaklandır (tahsilat / borcumuz arttı)']],req:1,def:defType||'borc'},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'nakit',label:'Nakit Hareketi (para gerçekten hesaba girdi/çıktıysa)',type:'select',opts:[['','Yok — sadece cari kaydı (veresiye)'],['gelir','💰 Bu hesaba PARA GİRİŞİ oldu (tahsilat)'],['gider','💸 Bu hesaptan PARA ÇIKIŞI oldu (ödeme)']],def:''},
-  {name:'method',label:'Yöntem (nakit hareketi seçtiyseniz): kasa / banka / 💳 kredi kartı',type:'select',opts:payMethodOpts(CO)},
+  {name:'method',label:'Yöntem: kasa / banka / 💳 kredi kartı / 🏛 merkez',type:'select',opts:payMethodOpts(CO,1)},
   {name:'vade',label:'Vade tarihi (hatırlatma için)',type:'date',def:c.vadeGun?addDays(todayISO(),+c.vadeGun):''},
   {name:'desc',label:'Açıklama',ph:'Fatura no, işlem detayı...'}
  ],o=>{
   var method=o.method||''; var isCard=method.indexOf('card:')===0; var cardId=isCard?method.slice(5):''; var bankAccId=isCard?'':method;
   if(o.nakit&&!method){ toast('⚠ "Nakit Hareketi" seçtiniz ama yöntem seçmediniz — parayı hangi kasa/banka veya kredi kartıyla işlediğinizi seçin; gerçek para hareketi yoksa "Yok — sadece cari kaydı (veresiye)" seçeneğini işaretleyin.'); cariTxnForm(cariId,o.type,o); return; }
   if(isCard&&o.nakit!=='gider'){ toast('💳 Kredi kartı yalnızca ödeme (para çıkışı) için seçilebilir; tahsilat için kasa/banka seçin.'); cariTxnForm(cariId,o.type,o); return; }
+  if(isMerkezMethod(method)){ /* v40: ödemeyi şirket merkezi yaptı */
+   if(o.nakit!=='gider'){ toast('🏛 MERKEZ ÖDER seçeneği yalnızca ÖDEME için kullanılır — "Nakit Hareketi" alanında "💸 PARA ÇIKIŞI oldu" seçeneğini işaretleyin'); cariTxnForm(cariId,o.type,o); return; }
+   if(o.type!=='borc'){ toast('🏛 Merkez ödemesi cariye olan BORCUMUZU kapatır — "İşlem" alanında "Borçlandır" seçeneğini işaretleyin'); cariTxnForm(cariId,o.type,o); return; }
+   if(!(+o.amount>0)){ toast('Tutar girin'); cariTxnForm(cariId,o.type,o); return; }
+   if(merkezIcerdenOde(CO,{hedef:'cari',cariId:cariId,amount:+o.amount,date:o.date,desc:o.desc||'',method:merkezMethodOf(method)},(c.name||'Cari')+' ödemesi kaydedildi'))go('cari');
+   return;
+  }
   var ctid=nid();
   S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:cariId,type:o.type,amount:+o.amount,date:o.date,vade:o.vade,desc:o.desc,nakit:o.nakit||'',accId:bankAccId||'',cardId:cardId||''}));
   let nakitMsg='';
@@ -2211,13 +2225,19 @@ function staffPayForm(staffId,init){
   {name:'type',label:'İşlem türü',type:'select',opts:[['maas','Maaş ödemesi'],['avans','Avans'],['prim','Prim / ikramiye'],['kesinti','Kesinti']],req:1},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01,def:st.salary||''},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'period',label:'Dönem',type:'month',def:monthISO(),req:1},
-  {name:'method',label:'Hangi hesaptan / kart (maaş/avans/prim için zorunlu)',type:'select',opts:payMethodOpts(CO)},
+  {name:'method',label:'Hangi hesaptan / kart / 🏛 merkez (maaş/avans/prim için zorunlu)',type:'select',opts:payMethodOpts(CO,1)},
   {name:'kesintiAccId',label:'Kesinti NAKİT tahsil edildiyse hangi hesaba girdi (opsiyonel — boşsa maaştan mahsup edilir)',type:'select',opts:accOpts(CO,1)},
   {name:'desc',label:'Açıklama'}
  ],o=>{
   var isPay=(o.type==='maas'||o.type==='avans'||o.type==='prim');
   if(isPay&&!o.method){ toast('⚠ Maaş/avans/prim ödemesi için paranın çıktığı hesabı ya da kredi kartını seçin. Nakit çıkışı olmadan ödeme işlenemez.'); staffPayForm(staffId,o); return; }
   var isCard=isPay&&String(o.method).indexOf('card:')===0; // D1: personel ödemesi kartla da yapılabilir
+  if(isPay&&isMerkezMethod(o.method)){ /* v40: personel ödemesini şirket merkezi yaptı */
+   if(!(+o.amount>0)){ toast('Tutar girin'); staffPayForm(staffId,o); return; }
+   var _tl={maas:'maaşı',avans:'avansı',prim:'primi'}[o.type]||'ödemesi';
+   if(merkezIcerdenOde(CO,{hedef:'maas',staffId:staffId,stype:o.type,amount:+o.amount,date:o.date,period:o.period,desc:o.desc||'',method:merkezMethodOf(o.method)},(st.name||'')+' '+_tl+' kaydedildi'))go('staff');
+   return;
+  }
   var stid=nid();
   S.staffTxns.push(stampCreate({id:stid,co:CO,staffId:staffId,type:o.type,amount:+o.amount,date:o.date,period:o.period,desc:o.desc,accId:(isPay&&!isCard)?o.method:'',cardId:isCard?o.method.slice(5):''}));
   var _d=(o.type==='maas'?'Maaş: ':o.type==='avans'?'Avans: ':o.type==='prim'?'Prim: ':'Kesinti: ')+(st.name||'')+' ('+(o.period||'')+')';
@@ -2383,7 +2403,7 @@ function payFixed(fid){
  if(!byCo(S.accounts,CO).length)return toast('Önce Banka & Kasa ekranından bir hesap ekleyin');
  openForm('Ödeme Yap — '+f.name,[
   {row:[{name:'amount',label:'Ödenen tutar (₺)',type:'number',req:1,def:f.amount},{name:'paidDate',label:'Ödeme tarihi',type:'date',def:todayISO(),req:1}]},
-  {name:'method',label:'Ödeme yöntemi (kasa / banka / 💳 kredi kartı)',type:'select',opts:payMethodOpts(CO),req:1},
+  {name:'method',label:'Ödeme yöntemi (kasa / banka / 💳 kredi kartı / 🏛 merkez)',type:'select',opts:payMethodOpts(CO,1),req:1},
   {name:'period',label:'Dönem',type:'month',def:monthISO(),req:1}
  ],o=>{
   if(S.fixedLogs.some(function(l){return l.fixedId===fid&&l.period===o.period&&!l.deletedAt;})){ // v14-R7: maasDonemi'ndeki koruma buraya da
@@ -2391,6 +2411,11 @@ function payFixed(fid){
   }
   const cat= f.type==='kira'?'Kira': f.type==='fatura'?'Fatura & Abonelik':'Vergi & SGK';
   const isCard=String(o.method).indexOf('card:')===0; // C4: sabit ödeme kartla da yapılabilir
+  if(isMerkezMethod(o.method)){ /* v40: sabit ödemeyi şirket merkezi yaptı */
+   if(!(+o.amount>0)){ toast('Tutar girin'); return; }
+   if(merkezIcerdenOde(CO,{hedef:'sabit',fixedId:fid,period:o.period,amount:+o.amount,date:o.paidDate,desc:'',method:merkezMethodOf(o.method)},f.name+' ödendi olarak işaretlendi'))go('fixed');
+   return;
+  }
   var ctid='';
   if(f.cariId&&S.cari.find(x=>x.id===f.cariId&&!x.deletedAt)){ // C4: tanımdaki cariye ödeme işlenir (borcumuz kapanır)
    ctid=nid();
@@ -5195,10 +5220,11 @@ function fixOrphanTxn(id){
 }
 
 /* Cari ödeme/tahsilat yöntemi: kasa/banka hesapları + kredi kartları (v10.5) */
-function payMethodOpts(co){
+function payMethodOpts(co,withMerkez){
  var l=[['','— Seçin —']];
  byCo(S.accounts,co).filter(function(a){return a.active!=='0';}).forEach(function(a){l.push([a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name]);});
  byCo(S.cards,co).filter(function(c){return c.active!=='0';}).forEach(function(c){l.push(['card:'+c.id,'💳 '+c.name+' (kredi kartı)']);});
+ if(withMerkez&&typeof merkezOpts==='function')l=l.concat(merkezOpts(co)); /* v40: "🏛 MERKEZ ÖDER" seçenekleri */
  return l;
 }
 
@@ -5794,6 +5820,117 @@ function merkezOdeSec(){if(!merkezCoOpts().length){toast('⛔ Erişim yetkiniz o
 function merkezAktarSec(){if(!merkezCoOpts().length){toast('⛔ Erişim yetkiniz olan şirket yok');return;}openForm('Hangi şirkete nakit aktarılacak?',[{name:'co',label:'Şirket',type:'select',opts:merkezCoOpts(),req:1}],function(o){merkezAktarForm(o.co);});}
 
 /* ================== T1/T4 — MERKEZDEN ŞİRKET ADINA ÖDEME ================== */
+/* ==================================================================================
+   v40 — MERKEZ ÖDEMESİ ŞİRKET İÇİ FORMLARDAN DA SEÇİLEBİLİR
+   Personel şirket ekranından çıkmadan "🏛 MERKEZ ÖDER" seçeneğini işaretler;
+   kayıtlar Merkez Kasa ekranından girilmiş gibi İKİ DEFTERE birden yazılır.
+   Tek kayıt yolu: merkezKayitYaz() — hem Merkez ekranı hem şirket içi formlar bunu kullanır.
+   ================================================================================== */
+function isMerkezMethod(m){return String(m||'').indexOf('merkez:')===0;}
+function merkezMethodOf(m){return String(m).slice(7);} /* 'MA1' veya 'card:MK1' */
+function merkezOpts(co){ /* şirket içi formlarda "merkez öder" seçenekleri */
+ if(!co||co==='merkez'||co==='grup')return [];
+ if(typeof canAccessCo!=='function'||!canAccessCo('merkez'))return [];
+ var l=[];
+ byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).forEach(function(a){
+  l.push(['merkez:'+a.id,'🏛 MERKEZ ÖDER — '+(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' (merkeze borçlanırız)']);});
+ byCo(S.cards,'merkez').filter(function(c){return c.active!=='0';}).forEach(function(c){
+  l.push(['merkez:card:'+c.id,'🏛 MERKEZ ÖDER — 💳 '+c.name+' (merkeze borçlanırız)']);});
+ return l;
+}
+
+/* Tek kayıt yolu — hedef: gider | cari | maas | sabit | kart | kasa
+   o: {hedef, method('MA1'|'card:MK1'), amount, date, desc, taksit, cat, cariId,
+       staffId, stype, fixedId, period, hedefCard, hedefAcc}
+   döner: {icId, N}  (N = uygulanan taksit sayısı) */
+function merkezKayitYaz(coId,o){
+ var icId=nid(),isCard=String(o.method).indexOf('card:')===0,cardId=isCard?String(o.method).slice(5):'';
+ var amt=+o.amount,N=+o.taksit||1;
+ if(N>1&&(!isCard||o.hedef!=='gider'))N=1;
+ var cmc=coMerkezCari(coId),desc=o.desc||'';
+ ensureCat('gider','Grup İçi');
+ merkezOdemeYaz({coId:coId,method:o.method,amount:amt,date:o.date,desc:desc,icId:icId,taksit:N,
+  mo:{hedef:o.hedef,cat:o.cat||'',cariId:o.cariId||'',staffId:o.staffId||'',stype:o.stype||'maas',
+      fixedId:o.fixedId||'',period:o.period||'',taksit:N,hedefCard:o.hedefCard||'',hedefAcc:o.hedefAcc||'',desc:desc}});
+ var mcardId=isCard?(S.cardTxns.filter(function(x){return x.icId===icId;})[0]||{}).id:'';
+ var sonCariEklendi=false;
+ if(o.hedef==='cari'){
+  pushRec(S.cariTxns,{id:nid(),co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
+   desc:'🏛 Merkezden ödendi'+(desc?' — '+desc:''),nakit:'',accId:'',mrk:1,ic:true,icId:icId});
+ }else if(o.hedef==='kart'){
+  pushRec(S.cardTxns,{id:nid(),co:coId,cardId:o.hedefCard,type:'odeme',amount:amt,date:o.date,
+   desc:'🏛 Merkezden kart borcu ödemesi'+(desc?' — '+desc:''),ic:true,icId:icId});
+ }else if(o.hedef==='kasa'){
+  ensureCat('gelir','Grup İçi');
+  var _cctId=nid();
+  pushRec(S.cariTxns,{id:_cctId,co:coId,cariId:cmc.id,type:'alacak',amount:amt,date:o.date,
+   desc:'🏛 Merkezden nakit aktarım'+(desc?' — '+desc:''),nakit:'gelir',accId:o.hedefAcc,ic:true,icId:icId});
+  pushRec(S.txns,{id:nid(),co:coId,type:'gelir',date:o.date,amount:amt,accId:o.hedefAcc,
+   cat:'Grup İçi',desc:'◀ Merkezden aktarım'+(desc?' — '+desc:''),xfer:true,ic:true,icId:icId,
+   cariId:cmc.id,cariTxnId:_cctId});
+  sonCariEklendi=true;
+ }else{
+  var stxId='',cat='',baseDesc='🏛 Merkezden ödendi'+(desc?' — '+desc:''),fx=null;
+  if(o.hedef==='maas'){
+   stxId=nid();cat='Personel';
+   pushRec(S.staffTxns,{id:stxId,co:coId,staffId:o.staffId,type:o.stype||'maas',amount:amt,date:o.date,
+    period:o.period||'',accId:'',desc:baseDesc,ic:true,icId:icId});
+  }else if(o.hedef==='sabit'){
+   fx=S.fixed.find(function(x){return x.id===o.fixedId&&!x.deletedAt;})||{type:'fatura',name:'?'};
+   cat= fx.type==='kira'?'Kira': fx.type==='fatura'?'Fatura & Abonelik':'Vergi & SGK';
+   baseDesc='🏛 Merkezden ödendi — '+(FTYPE[fx.type]||'')+': '+fx.name+' ('+mTR(o.period)+')'+(desc?' — '+desc:'');
+   if(fx.cariId&&S.cari.find(function(x){return x.id===fx.cariId&&!x.deletedAt;})){
+    pushRec(S.cariTxns,{id:nid(),co:coId,cariId:fx.cariId,type:'borc',amount:amt,date:o.date,
+     desc:'Sabit ödeme (merkezden): '+fx.name+' ('+mTR(o.period)+')',nakit:'',accId:'',mrk:1,ic:true,icId:icId});
+   }
+  }else{
+   cat=o.cat;
+   if(o.cariId&&S.cari.find(function(x){return x.id===o.cariId&&!x.deletedAt;})){ /* v40: gider + aynı anda cariye ödeme */
+    pushRec(S.cariTxns,{id:nid(),co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
+     desc:'🏛 Merkezden ödendi'+(desc?' — '+desc:''),nakit:'',accId:'',mrk:1,ic:true,icId:icId});
+   }
+  }
+  var firstTxId='';
+  if(N<=1){
+   var tx={id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
+    src:isCard?'merkez-kart':'merkez',cat:cat,desc:baseDesc,ic:true,icId:icId};
+   if(o.vat)tx.vat=o.vat;
+   if(mcardId)tx.cardTxnId=mcardId;
+   if(stxId)tx.staffTxnId=stxId;
+   firstTxId=tx.id;pushRec(S.txns,tx);
+  }else{
+   var per=Math.round((amt/N)*100)/100,acc=0;
+   for(var ti=0;ti<N;ti++){
+    var part=(ti===N-1)?Math.round((amt-acc)*100)/100:per; acc=Math.round((acc+per)*100)/100;
+    var tx2={id:nid(),co:coId,type:'gider',date:addMonthsClamped(o.date,ti),amount:part,accId:'',
+     src:'merkez-kart',cat:cat,taksitNo:(ti+1)+'/'+N,cardTxnId:mcardId,
+     desc:baseDesc+' (taksit '+(ti+1)+'/'+N+')',ic:true,icId:icId};
+    if(!firstTxId)firstTxId=tx2.id;
+    pushRec(S.txns,tx2);
+   }
+  }
+  if(o.hedef==='sabit'){
+   pushRec(S.fixedLogs,{id:nid(),co:coId,fixedId:o.fixedId,period:o.period,amount:amt,paidDate:o.date,txnId:firstTxId,ic:true,icId:icId});
+  }
+ }
+ if(!sonCariEklendi){
+  pushRec(S.cariTxns,{id:nid(),co:coId,cariId:cmc.id,type:'alacak',amount:amt,date:o.date,
+   desc:'🏛 Merkez ödemesi'+(desc?' — '+desc:''),nakit:'',accId:'',ic:true,icId:icId});
+ }
+ try{logAudit('Merkez ödemesi',coName(coId)+' · '+fmt0(amt)+' · '+({gider:'gider',cari:'cari ödemesi',maas:'personel',sabit:'sabit ödeme',kart:'kart borcu',kasa:'kasaya aktarım'}[o.hedef]||o.hedef)+(N>1?' · '+N+' taksit':''));}catch(e){}
+ return {icId:icId,N:N};
+}
+
+/* Şirket içi formlardan çağrılır: ortak doğrulama + kayıt + mesaj */
+function merkezIcerdenOde(coId,o,basariMesaji){
+ if(!canAccessCo('merkez')){toast('⛔ Merkez Kasa yetkiniz yok — bu ödemeyi merkez üzerinden işleyemezsiniz');return false;}
+ if(!byCo(S.accounts,'merkez').length&&!byCo(S.cards,'merkez').length){toast('⛔ Merkezde tanımlı hesap/kart yok');return false;}
+ var r=merkezKayitYaz(coId,o);
+ save();
+ toast('✅ '+basariMesaji+' — 🏛 MERKEZ ödedi, '+coName(coId)+' merkeze '+fmt0(+o.amount)+' borçlandı'+(r.N>1?' · gider '+r.N+' aya bölündü':''));
+ return true;
+}
+
 function merkezOdeForm(coId,init){
  if(merkezYetkiUyari(coId))return;
  var caris=byCo(S.cari,coId).filter(function(c){return c.active!=='0'&&!c.sys;});
@@ -5832,89 +5969,19 @@ function merkezOdeForm(coId,init){
   if(o.hedef==='maas'&&!o.staffId){toast('Hangi personele ödeme yapıldığını seçin');return merkezOdeForm(coId,o);}
   if(o.hedef==='kart'&&!o.hedefCard){toast('Hangi kredi kartının borcunun ödendiğini seçin');return merkezOdeForm(coId,o);}
   if(o.hedef==='kasa'&&!o.hedefAcc){toast('Paranın hangi kasaya/bankaya gireceğini seçin');return merkezOdeForm(coId,o);}
-  var fx=null;
   if(o.hedef==='sabit'){
    if(!o.fixedId){toast('Hangi sabit ödeme tanımının ödendiğini seçin');return merkezOdeForm(coId,o);}
    if(!o.period){toast('Sabit ödemenin dönemini seçin');return merkezOdeForm(coId,o);}
-   fx=S.fixed.find(function(x){return x.id===o.fixedId&&!x.deletedAt;});
-   if(!fx){toast('Sabit ödeme tanımı bulunamadı');return merkezOdeForm(coId,o);}
+   if(!S.fixed.find(function(x){return x.id===o.fixedId&&!x.deletedAt;})){toast('Sabit ödeme tanımı bulunamadı');return merkezOdeForm(coId,o);}
    if(S.fixedLogs.some(function(l){return l.fixedId===o.fixedId&&l.period===o.period&&!l.deletedAt;})){
     toast('⚠ '+mTR(o.period)+' dönemi için bu tanıma ait ödeme kaydı zaten var — mükerrer kayıt engellendi.');return;
    }
   }
-  var icId=nid(),isCard=String(o.method).indexOf('card:')===0,cardId=isCard?String(o.method).slice(5):'';
-  var N=+o.taksit||1;
-  if(N>1&&(!isCard||o.hedef!=='gider')){N=1;toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ödemelerinde uygulanır — bu kayıt tek çekim olarak işlendi');}
-  var cmc=coMerkezCari(coId),desc=o.desc||'';
-  ensureCat('gider','Grup İçi');
-  /* --- MERKEZ tarafı: nakit/kart çıkışı + şirketten alacak (her hedefte aynı) --- */
-  merkezOdemeYaz({coId:coId,method:o.method,amount:amt,date:o.date,desc:desc,icId:icId,taksit:N,
-   mo:{hedef:o.hedef,cat:o.cat||'',cariId:o.cariId||'',staffId:o.staffId||'',stype:o.stype||'maas',
-       fixedId:o.fixedId||'',period:o.period||'',taksit:N,hedefCard:o.hedefCard||'',hedefAcc:o.hedefAcc||'',desc:desc}});
-  var mcardId=isCard?(S.cardTxns.filter(function(x){return x.icId===icId;})[0]||{}).id:'';
-  /* --- ŞİRKET tarafı --- */
-  var sonCariEklendi=false;
-  if(o.hedef==='cari'){
-   pushRec(S.cariTxns,{id:nid(),co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
-    desc:'🏛 Merkezden ödendi'+(desc?' — '+desc:''),nakit:'',accId:'',ic:true,icId:icId});
-  }else if(o.hedef==='kart'){
-   /* v37: şirketin kredi kartı borcu merkezden ödenir — gider DEĞİL, kart borcu azalır */
-   var _kc=S.cards.find(function(x){return x.id===o.hedefCard;})||{};
-   pushRec(S.cardTxns,{id:nid(),co:coId,cardId:o.hedefCard,type:'odeme',amount:amt,date:o.date,
-    desc:'🏛 Merkezden kart borcu ödemesi'+(desc?' — '+desc:''),ic:true,icId:icId});
-  }else if(o.hedef==='kasa'){
-   /* v37: merkezden şirket kasasına nakit — GELİR DEĞİL (xfer) */
-   ensureCat('gelir','Grup İçi');
-   var _cctId=nid();
-   pushRec(S.cariTxns,{id:_cctId,co:coId,cariId:cmc.id,type:'alacak',amount:amt,date:o.date,
-    desc:'🏛 Merkezden nakit aktarım'+(desc?' — '+desc:''),nakit:'gelir',accId:o.hedefAcc,ic:true,icId:icId});
-   pushRec(S.txns,{id:nid(),co:coId,type:'gelir',date:o.date,amount:amt,accId:o.hedefAcc,
-    cat:'Grup İçi',desc:'◀ Merkezden aktarım'+(desc?' — '+desc:''),xfer:true,ic:true,icId:icId,
-    cariId:cmc.id,cariTxnId:_cctId});
-   sonCariEklendi=true;
-  }else{
-   var stxId='',cat='',baseDesc='🏛 Merkezden ödendi'+(desc?' — '+desc:'');
-   if(o.hedef==='maas'){
-    stxId=nid();cat='Personel';
-    pushRec(S.staffTxns,{id:stxId,co:coId,staffId:o.staffId,type:o.stype||'maas',amount:amt,date:o.date,
-     accId:'',desc:baseDesc,ic:true,icId:icId});
-   }else if(o.hedef==='sabit'){
-    cat= fx.type==='kira'?'Kira': fx.type==='fatura'?'Fatura & Abonelik':'Vergi & SGK';
-    baseDesc='🏛 Merkezden ödendi — '+(FTYPE[fx.type]||'')+': '+fx.name+' ('+mTR(o.period)+')'+(desc?' — '+desc:'');
-    if(fx.cariId&&S.cari.find(function(x){return x.id===fx.cariId&&!x.deletedAt;})){
-     pushRec(S.cariTxns,{id:nid(),co:coId,cariId:fx.cariId,type:'borc',amount:amt,date:o.date,
-      desc:'Sabit ödeme (merkezden): '+fx.name+' ('+mTR(o.period)+')',nakit:'',accId:'',ic:true,icId:icId});
-    }
-   }else cat=o.cat;
-   var firstTxId='';
-   if(N<=1){
-    var tx={id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
-     src:isCard?'merkez-kart':'merkez',cat:cat,desc:baseDesc,ic:true,icId:icId};
-    if(mcardId)tx.cardTxnId=mcardId;
-    if(stxId)tx.staffTxnId=stxId;
-    firstTxId=tx.id;pushRec(S.txns,tx);
-   }else{
-    var per=Math.round((amt/N)*100)/100,acc=0;
-    for(var ti=0;ti<N;ti++){
-     var part=(ti===N-1)?Math.round((amt-acc)*100)/100:per; acc=Math.round((acc+per)*100)/100;
-     var tx2={id:nid(),co:coId,type:'gider',date:addMonthsClamped(o.date,ti),amount:part,accId:'',
-      src:'merkez-kart',cat:cat,taksitNo:(ti+1)+'/'+N,cardTxnId:mcardId,
-      desc:baseDesc+' (taksit '+(ti+1)+'/'+N+')',ic:true,icId:icId};
-     if(!firstTxId)firstTxId=tx2.id;
-     pushRec(S.txns,tx2);
-    }
-   }
-   if(o.hedef==='sabit'){
-    pushRec(S.fixedLogs,{id:nid(),co:coId,fixedId:o.fixedId,period:o.period,amount:amt,paidDate:o.date,txnId:firstTxId,ic:true,icId:icId});
-   }
-  }
-  if(!sonCariEklendi){
-   pushRec(S.cariTxns,{id:nid(),co:coId,cariId:cmc.id,type:'alacak',amount:amt,date:o.date,
-    desc:'🏛 Merkez ödemesi'+(desc?' — '+desc:''),nakit:'',accId:'',ic:true,icId:icId});
-  }
-  try{logAudit('Merkez ödemesi',coName(coId)+' · '+fmt0(amt)+' · '+({gider:'gider',cari:'cari ödemesi',maas:'personel',sabit:'sabit ödeme',kart:'kart borcu',kasa:'kasaya aktarım'}[o.hedef])+(N>1?' · '+N+' taksit':''));}catch(e){}
+  var isCard=String(o.method).indexOf('card:')===0;
+  if((+o.taksit||1)>1&&(!isCard||o.hedef!=='gider'))toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ödemelerinde uygulanır — bu kayıt tek çekim olarak işlendi');
+  var r=merkezKayitYaz(coId,o);
   save();
-  toast('✅ '+fmt0(amt)+' merkezden ödendi — '+coName(coId)+' merkeze borçlandı'+(N>1?' · gider '+N+' aya bölündü (aylık ~'+fmt0(amt/N)+')':''));
+  toast('✅ '+fmt0(amt)+' merkezden ödendi — '+coName(coId)+' merkeze borçlandı'+(r.N>1?' · gider '+r.N+' aya bölündü (aylık ~'+fmt0(amt/r.N)+')':''));
   go(PAGE==='merkez'?'merkez':PAGE);
  },init||{hedef:'gider',date:todayISO(),stype:'maas',taksit:1,period:monthISO()});
  merkezOdeBind(coId);

@@ -1,6 +1,18 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v40  (05.09.2026)  Sirket icinden "MERKEZ ODER" secenegi
+     Personel sirket ekranindan cikmadan odemeyi merkeze yaptirabiliyor.
+     Odeme yontemi listesine "MERKEZ ODER - <hesap/kart>" secenekleri eklendi:
+       - Cari odemesi (Cari Hesaplar)
+       - Personel maas / avans / prim
+       - Sabit odeme (kira / vergi / SGK / fatura)
+       - Gider ekle (kategori + istege bagli cari)
+     Kayitlar Merkez Kasa ekranindan girilmis gibi iki deftere birden yazilir,
+     Merkez ekranindan "Duzelt" ile duzeltilebilir.
+     Gelir, stok ve demirbas formlarina eklenmedi (bilerek).
+     377 otomatik test gecti.
+
 v39  (05.09.2026)  Merkez Hesabi karti hareket olmadan da gorunuyor
      Onceden kart yalnizca o sirkete merkezden ILK odeme yapildiktan sonra
      ciziliyordu; artik bos durumda da gorunup ne oldugunu acikliyor.
