@@ -6279,12 +6279,21 @@ function rOrtak(){
  var payTop=ps.reduce(function(s,p){return s+(+p.share||0);},0);
  /* ortak katkılarının şirketlere oransal dağılımı */
  var toplamKatki=sermayeTop+cariTop;
+ /* v43 (RAPOR DÜZELTMESİ): eskiden yalnızca 'borc' (merkezden şirkete giden) toplanıyor,
+    şirketten GERİ GELEN tahsilatlar ('alacak') hiç düşülmüyordu. Bir şirkete katkı yapılıp
+    sonra para geri alındığında tablo hâlâ ilk tutarı gösteriyordu ve rakam sürekli şişiyordu.
+    Artık gönderilen / geri gelen / NET ayrı ayrı gösteriliyor ve dağıtım NET üzerinden yapılıyor.
+    Net değer, Merkez Kasa ekranındaki "Merkez Alacağı" ile birebir aynıdır. */
  var coGiden=merkezCos().map(function(c){
-  var g=0;
-  S.cariTxns.forEach(function(t){if(t.co==='merkez'&&t.ic&&!t.deletedAt&&t.type==='borc'){var cc=S.cari.find(function(x){return x.id===t.cariId;});if(cc&&cc.sys==='co:'+c.id)g+=+t.amount;}});
-  return {c:c,g:g};
+  var mc=findMerkezCari(c.id),giden=0,gelen=0;
+  if(mc)S.cariTxns.forEach(function(t){
+   if(t.co!=='merkez'||t.deletedAt||t.cariId!==mc.id)return;
+   if(t.type==='borc')giden+=+t.amount; else gelen+=+t.amount;});
+  return {c:c,giden:Math.round(giden*100)/100,gelen:Math.round(gelen*100)/100,net:Math.round((giden-gelen)*100)/100};
  });
- var gidenTop=coGiden.reduce(function(s,r){return s+r.g;},0);
+ var gidenTop=coGiden.reduce(function(s,r){return s+r.giden;},0);
+ var gelenTop=coGiden.reduce(function(s,r){return s+r.gelen;},0);
+ var netTop=Math.round((gidenTop-gelenTop)*100)/100;
 
  document.getElementById('main').innerHTML= topbar('👥 Ortaklar & Sermaye',
   '<button class="btn" data-act="ortakForm">＋ Ortak Ekle</button><button class="btn gh" data-act="ortakKarPayiForm">🎁 Kâr Payı Dağıt</button>')+
@@ -6320,12 +6329,15 @@ function rOrtak(){
      '<button class="btn sm dng" data-act="ortakSil" data-arg="'+p.id+'">Sil</button>'+
     '</div></div>';}).join('')+'</div>'
   :'<div class="card"><div class="empty"><b>Henüz ortak tanımlı değil</b>“＋ Ortak Ekle” ile ortakları ve hisse oranlarını girin; sermaye ve ortak cari hareketleri burada izlenir.</div></div>')+
- (gidenTop?'<div class="card"><h2>Ortak Katkılarının Şirketlere Dağılımı <span class="tiny">oransal — para ayrıştırılamaz olduğu için hisseye göre dağıtılmıştır</span></h2>'+
-  '<div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Merkezden Giden Toplam</th>'+ps.map(function(p){return '<th class="num">'+esc(p.name)+'</th>';}).join('')+'</tr></thead><tbody>'+
-  coGiden.map(function(r){return '<tr><td><b style="color:'+r.c.color+'">'+esc(r.c.name)+'</b></td><td class="num">'+fmt0(r.g)+'</td>'+
-   ps.map(function(p){var pay=payTop>0?(+p.share||0)/payTop:0;return '<td class="num">'+fmt0(r.g*pay)+'</td>';}).join('')+'</tr>';}).join('')+
-  '<tr style="background:var(--acc-soft)"><td><b>TOPLAM</b></td><td class="num"><b>'+fmt0(gidenTop)+'</b></td>'+ps.map(function(p){var pay=payTop>0?(+p.share||0)/payTop:0;return '<td class="num"><b>'+fmt0(gidenTop*pay)+'</b></td>';}).join('')+'</tr>'+
-  '</tbody></table></div><p class="tiny" style="margin-top:8px">Para kasada karıştığı için “hangi ortağın parası hangi şirkete gitti” kesin olarak ayrıştırılamaz; bu tablo hisse oranlarına göre <b>oransal</b> bir dağıtımdır ve ortaklar arası mutabakat için kullanılır.</p></div>':'')+
+ (gidenTop?'<div class="card"><h2>Ortak Katkılarının Şirketlere Dağılımı <span class="tiny">geri gelen para düşülmüş NET tutar üzerinden</span></h2>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Gönderilen</th><th class="num">Geri Gelen</th><th class="num" title="Gönderilen − Geri Gelen · halen o şirkette duran tutar">NET (halen orada)</th>'+ps.map(function(p){return '<th class="num">'+esc(p.name)+'</th>';}).join('')+'</tr></thead><tbody>'+
+  coGiden.map(function(r){return '<tr><td><b style="color:'+r.c.color+'">'+esc(r.c.name)+'</b></td>'+
+   '<td class="num">'+fmt0(r.giden)+'</td>'+
+   '<td class="num" style="color:var(--pos)">'+(r.gelen?'−'+fmt0(r.gelen):'—')+'</td>'+
+   '<td class="num" style="font-weight:700;color:'+(r.net<0?'var(--neg)':'var(--ink)')+'">'+fmt0(r.net)+'</td>'+
+   ps.map(function(p){var pay=payTop>0?(+p.share||0)/payTop:0;return '<td class="num">'+fmt0(r.net*pay)+'</td>';}).join('')+'</tr>';}).join('')+
+  '<tr style="background:var(--acc-soft)"><td><b>TOPLAM</b></td><td class="num"><b>'+fmt0(gidenTop)+'</b></td><td class="num"><b>'+(gelenTop?'−'+fmt0(gelenTop):'—')+'</b></td><td class="num"><b>'+fmt0(netTop)+'</b></td>'+ps.map(function(p){var pay=payTop>0?(+p.share||0)/payTop:0;return '<td class="num"><b>'+fmt0(netTop*pay)+'</b></td>';}).join('')+'</tr>'+
+  '</tbody></table></div><p class="tiny" style="margin-top:8px"><b>Nasıl okunur:</b> “Gönderilen” merkezden o şirkete bugüne kadar giden toplam; “Geri Gelen” şirketin merkeze geri ödediği tutar; <b>NET</b> ikisinin farkı, yani <b>halen o şirkette duran para</b>. Ortak sütunları bu NET tutarın hisse oranına göre bölünmüş halidir. NET rakamı, Merkez Kasa ekranındaki “Merkez Alacağı” ile birebir aynıdır — tutmuyorsa Ayarlar → Sistem Tutarlılık Denetimi’ne bakın.<br>Para kasada karıştığı için “hangi ortağın parası hangi şirkete gitti” kesin olarak ayrıştırılamaz; ortak sütunları hisse oranına göre <b>oransal</b> bir dağıtımdır ve ortaklar arası mutabakat için kullanılır.</p></div>':'')+
  '<div class="card"><h2>ℹ️ Sermaye mi, Ortak Cari mi?</h2><div style="overflow-x:auto"><table><thead><tr><th></th><th>Sermaye</th><th>Ortak Cari</th></tr></thead><tbody>'+
   '<tr><td><b>Ne demek</b></td><td>Ortak parayı kalıcı olarak koydu</td><td>Ortak şirkete borç verdi</td></tr>'+
   '<tr><td><b>Geri ödenir mi</b></td><td>Hayır (sermaye azaltımı gerekir)</td><td>Evet, istediğinde çekebilir</td></tr>'+

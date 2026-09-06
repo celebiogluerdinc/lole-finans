@@ -1,6 +1,16 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v43  (05.09.2026)  Ortak katki dagilimi raporu duzeltildi
+     HATA: "Ortak Katkilarinin Sirketlere Dagilimi" tablosu yalnizca merkezden
+     GIDEN parayi topluyor, sirketten GERI GELEN tahsilatlari hic dusmuyordu.
+     Bir sirkete katki yapilip sonra para geri alindiginda tablo hala ilk tutari
+     gosteriyor, rakam surekli sisiyordu.
+     YENI: Gonderilen / Geri Gelen / NET diye uc ayri sutun. Ortak paylari NET
+     tutar uzerinden hesaplaniyor. NET degeri Merkez Kasa ekranindaki
+     "Merkez Alacagi" ile birebir ayni.
+     21 yeni test + mevcut 439 = 460 otomatik test gecti.
+
 v42  (05.09.2026)  Oturum hatasi ayrimi + guncellemeler aninda geliyor
      - Supabase "yetki reddedildi" (suresi dolmus oturum) hatasi artik AG hatasindan
        ayriliyor. Eskiden ikisi de "Bulut baglantisi kurulamadi" diyordu ve kullanici
