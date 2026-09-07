@@ -2222,13 +2222,56 @@ function cariEkstre(id,from,to){
 /* ---------- PERSONEL & MAAŞ ---------- */
 var staffTab='kadro';
 function setStaffTab(v){staffTab=v;rStaff();}
+/* v44: PERSONEL EKRANI ARTIK DÖNEM BAZLI ÇALIŞIYOR.
+   Eskiden ekran yalnızca içinde bulunulan ayı gösteriyor ve ödemeleri ÖDEME TARİHİNE göre
+   sayıyordu; eylülde ödenen ağustos maaşı eylüle yazılıyor, ağustos hâlâ "ödenmemiş"
+   görünüyordu ve geçmiş ayın maaşını girmenin yolu yoktu. */
+var staffPer=null; /* seçili dönem (YYYY-AA) — null ise içinde bulunulan ay */
+function staffPeriod(){return staffPer||monthISO();}
+function stPerOf(t){return t.period||String(t.date||'').slice(0,7);} /* ödeme hangi DÖNEME ait */
+function shiftPeriod(p,k){var y=+String(p).slice(0,4),m=+String(p).slice(5,7)+k;
+ while(m<1){m+=12;y--;} while(m>12){m-=12;y++;}
+ return y+'-'+String(m).padStart(2,'0');}
+function setStaffPer(v){ staffPer=(v==='now')?null:v; rStaff(); }
+function staffPerShift(k){ staffPer=shiftPeriod(staffPeriod(),+k); if(staffPer===monthISO())staffPer=null; rStaff(); }
+function staffPayFor(id,per){ staffPayForm(id,{period:per||staffPeriod(),date:todayISO()}); }
+/* seçili dönemde bir personele ödenen maaş+avans */
+function staffPaidIn(stId,per){
+ return S.staffTxns.filter(function(t){return t.staffId===stId&&!t.deletedAt&&stPerOf(t)===per&&(t.type==='maas'||t.type==='avans');})
+  .reduce(function(s2,t){return s2+ +t.amount;},0);
+}
+/* geçmişte maaşı hiç girilmemiş dönemler (en fazla 12 ay geriye) */
+function odenmemisMaaslar(co){
+ var bugunAy=monthISO(),out=[];
+ byCo(S.staff,co).filter(function(x){return x.active!=='0';}).forEach(function(st){
+  var ilk=st.startDate?String(st.startDate).slice(0,7):'';
+  if(!ilk){
+   var ps=S.staffTxns.filter(function(t){return t.staffId===st.id&&!t.deletedAt;}).map(stPerOf).filter(Boolean).sort();
+   ilk=ps.length?ps[0]:bugunAy;
+  }
+  var alt=shiftPeriod(bugunAy,-11);
+  if(ilk<alt)ilk=alt;
+  var p=ilk,guard=0;
+  while(p<=bugunAy&&guard++<24){
+   var maasVar=S.staffTxns.some(function(t){return t.staffId===st.id&&!t.deletedAt&&t.type==='maas'&&stPerOf(t)===p;});
+   if(!maasVar){
+    var kismi=staffPaidIn(st.id,p);
+    out.push({st:st,per:p,maas:+st.salary||0,kismi:kismi,buAy:p===bugunAy});
+   }
+   p=shiftPeriod(p,1);
+  }
+ });
+ return out.sort(function(a,b){return a.per<b.per?-1:a.per>b.per?1:(a.st.name<b.st.name?-1:1);});
+}
 function rStaff(){
  const list=byCo(S.staff,CO).filter(s=>s.active!=='0');
  const inactiveList=byCo(S.staff,CO).filter(s=>s.active==='0'); // v31: pasif personeli görüp yönetebilme
- const mo=monthISO();
+ const mo=staffPeriod();                    /* v44: seçili dönem */
+ const buAy=(mo===monthISO());
  const pays=S.staffTxns.filter(t=>t.co===CO&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
+ const eksik=odenmemisMaaslar(CO).filter(x=>!x.buAy); /* geçmiş aylardan ödenmemişler */
  const lvs=S.leaves.filter(l=>l.co===CO&&!l.deletedAt).sort((a,b)=>a.start<b.start?1:-1);
- const ayOdeme=pays.filter(t=>t.date.startsWith(mo)&&(t.type==='maas'||t.type==='avans')).reduce((s,t)=>s+ +t.amount,0);
+ const ayOdeme=pays.filter(t=>stPerOf(t)===mo&&(t.type==='maas'||t.type==='avans')).reduce((s,t)=>s+ +t.amount,0); /* v44: ödeme tarihine değil DÖNEMİNE göre */
  const ms=monthSeries(CO,6,'Personel');
  const TT={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
  const LT={yillik:'Yıllık izin',ucretsiz:'Ücretsiz izin',rapor:'Sağlık raporu',mazeret:'Mazeret'};
@@ -2239,7 +2282,23 @@ function rStaff(){
  `<div class="grid g3" style="margin-bottom:16px">
   <div class="kpi"><div class="l">Aktif Personel</div><div class="v">${list.length}</div></div>
   <div class="kpi"><div class="l">Sözleşme Maaş Toplamı (statik)</div><div class="v">${fmt0(list.reduce((s,x)=>s+ +(x.salary||0),0))}</div></div>
-  <div class="kpi n"><div class="l">Bu Ay Ödenen (maaş+avans)</div><div class="v">${fmt0(ayOdeme)}</div>${(function(){var _mAll=sumRange(CO,monthISO()+'-01',todayISO());var _pg=_mAll.byCat['Personel']||0;var _r=_mAll.gelir?_pg/_mAll.gelir*100:0;return '<div class="s" style="color:'+(_r>35?'var(--neg)':_r<25&&_r>0?'var(--pos)':_r?'var(--warn)':'var(--ink3)')+'">Personel/Ciro: '+(_mAll.gelir?('%'+_r.toFixed(1)):'—')+' <span class="tiny">(sağlıklı bant %25-35)</span></div>';})()}</div></div>
+  <div class="kpi n"><div class="l">${mTR(mo)} Ödenen (maaş+avans)</div><div class="v">${fmt0(ayOdeme)}</div>${(function(){var _mAll=sumRange(CO,monthISO()+'-01',todayISO());var _pg=_mAll.byCat['Personel']||0;var _r=_mAll.gelir?_pg/_mAll.gelir*100:0;return '<div class="s" style="color:'+(_r>35?'var(--neg)':_r<25&&_r>0?'var(--pos)':_r?'var(--warn)':'var(--ink3)')+'">Personel/Ciro: '+(_mAll.gelir?('%'+_r.toFixed(1)):'—')+' <span class="tiny">(sağlıklı bant %25-35)</span></div>';})()}</div></div>
+ <div class="card" style="margin-bottom:12px;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+   <b style="font-size:13px">📅 Dönem:</b>
+   <button class="btn sm gh" data-act="staffPerShift" data-arg="-1" title="Önceki ay">‹</button>
+   <b style="font-size:15px;min-width:130px;text-align:center">${mTR(mo)}</b>
+   <button class="btn sm gh" data-act="staffPerShift" data-arg="1" title="Sonraki ay">›</button>
+   ${!buAy?`<button class="btn sm" data-act="setStaffPer" data-arg="now">⟲ Bu aya dön</button><span class="chip w">Geçmiş dönemi görüntülüyorsunuz</span>`:'<span class="tiny">Geçmiş bir ayın maaşını girmek için ‹ ile geriye gidin</span>'}
+  </div>
+ ${eksik.length?`<div class="card" style="margin-bottom:12px;border-left:4px solid var(--warn)">
+   <h2>⚠ Ödenmemiş Geçmiş Maaşlar <span class="chip n">${eksik.length}</span></h2>
+   <p class="tiny" style="margin-bottom:8px">Aşağıdaki dönemler için <b>maaş kaydı hiç girilmemiş</b>. Ay atladığı için gözden kaçan ödemeler burada birikir; “Öde” düğmesi doğru dönemi otomatik seçer.</p>
+   <div style="overflow-x:auto"><table><thead><tr><th>Personel</th><th>Dönem</th><th class="num">Sözleşme Maaşı</th><th class="num">O Dönem Ödenen</th><th class="rowact"></th></tr></thead><tbody>
+   ${eksik.slice(0,40).map(x=>`<tr><td><span class="avat sm" style="background:${hashColor(x.st.name)}">${esc(x.st.name.charAt(0))}</span> ${esc(x.st.name)}</td>
+    <td><b>${mTR(x.per)}</b></td><td class="num">${fmt0(x.maas)}</td>
+    <td class="num">${x.kismi?'<span class="chip w">avans '+fmt0(x.kismi)+'</span>':'<span class="chip n">—</span>'}</td>
+    <td class="rowact"><button class="btn sm" data-act="staffPayFor" data-arg="${x.st.id}~${x.per}">₺ Öde</button><button class="btn sm gh" data-act="setStaffPer" data-arg="${x.per}">Dönemi Aç</button></td></tr>`).join('')}
+   </tbody></table></div>${eksik.length>40?'<div class="tiny" style="padding:6px">İlk 40 kayıt gösteriliyor.</div>':''}</div>`:''}
  ${seg([['kadro','Kadro',list.length],['odeme','Ödemeler',pays.length],['izin','İzin & Rapor',lvs.length]],staffTab,'setStaffTab')}`+
  (staffTab==='odeme'
  ? `<div class="card"><h2>Tüm Ödeme Kayıtları</h2>
@@ -2261,7 +2320,7 @@ function rStaff(){
   ${chartVBars(ms.map(m=>({label:m.label,bars:[{value:m.gider,color:'var(--acc)',name:'Personel gideri'}]})),180)}</div>`:''}
  ${list.length? `<div class="grid g2">`+list.map(st=>{
    const col=hashColor(st.name);
-   const paid=S.staffTxns.filter(t=>t.staffId===st.id&&!t.deletedAt&&t.date.startsWith(mo)&&(t.type==='maas'||t.type==='avans')).reduce((s,t)=>s+ +t.amount,0); // v14-H13
+   const paid=staffPaidIn(st.id,mo); // v14-H13 · v44: dönem bazlı
    const pct=Math.min(100,paid/(+st.salary||1)*100);
    const onLeave=S.leaves.some(l=>l.staffId===st.id&&!l.deletedAt&&l.start<=todayISO()&&l.end>=todayISO()); // v14-H7
    return `<div class="card accCard" data-act="staffHist" data-arg="${st.id}" style="--ac:${col};cursor:pointer" title="Ödeme ve izin geçmişini aç">
@@ -2270,12 +2329,12 @@ function rStaff(){
      ${onLeave?'<span class="chip w" style="margin-left:auto">🏖 İzinde</span>':'<span class="chip p" style="margin-left:auto">Aktif</span>'}</div>
     <div class="grid g2" style="margin:12px 0 8px">
      <div><div class="tiny">Net Maaş</div><b style="font-size:19px">${fmt0(st.salary)}</b></div>
-     <div><div class="tiny">Bu Ay Ödenen${st.startDate?' <span title="İşe giriş: '+dTR(st.startDate)+'">· '+esc(kidemStr(st.startDate))+'</span>':''}</div><b style="font-size:19px;color:${paid>0?'var(--acc)':'var(--ink3)'}">${fmt0(paid)}</b></div>
+     <div><div class="tiny">${mTR(mo)} Ödenen${st.startDate?' <span title="İşe giriş: '+dTR(st.startDate)+'">· '+esc(kidemStr(st.startDate))+'</span>':''}</div><b style="font-size:19px;color:${paid>0?'var(--acc)':'var(--ink3)'}">${fmt0(paid)}</b></div>
     </div>
     <div style="background:#eceff6;border-radius:99px;height:8px;overflow:hidden"><div class="hbFill" style="width:${pct}%;height:100%;background:${col}"></div></div>
-    <div class="tiny" style="margin-top:4px">Bu ay maaşın %${pct.toFixed(0)}'i ödendi</div>
+    <div class="tiny" style="margin-top:4px">${mTR(mo)} maaşının %${pct.toFixed(0)}'i ödendi${paid<=0?' — <b>henüz ödenmedi</b>':''}</div>
     <div class="cardBtns">
-     <button class="btn sm" data-act="staffPayForm" data-arg="${st.id}">₺ Ödeme / Avans</button>
+     <button class="btn sm" data-act="staffPayFor" data-arg="${st.id}~${mo}">₺ ${mTR(mo)} Ödemesi</button>
      <button class="btn sm gh" data-act="leaveForm" data-arg="${st.id}">🏖 İzin</button>
      <button class="btn sm gh" data-act="staffHist" data-arg="${st.id}">📄 Geçmiş</button>
      <button class="btn sm gh" data-act="staffForm" data-arg="${st.id}">✎</button>
@@ -2305,7 +2364,7 @@ function staffPayForm(staffId,init){
  openForm('Ödeme — '+(st.name||''),[
   {name:'type',label:'İşlem türü',type:'select',opts:[['maas','Maaş ödemesi'],['avans','Avans'],['prim','Prim / ikramiye'],['kesinti','Kesinti']],req:1},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01,def:st.salary||''},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
-  {name:'period',label:'Dönem',type:'month',def:monthISO(),req:1},
+  {name:'period',label:'Dönem — maaşın HANGİ AYA ait olduğu (ödeme tarihi ayrı)',type:'month',def:staffPeriod(),req:1},
   {name:'method',label:'Hangi hesaptan / kart / 🏛 merkez (maaş/avans/prim için zorunlu)',type:'select',opts:payMethodOpts(CO,1)},
   {name:'kesintiAccId',label:'Kesinti NAKİT tahsil edildiyse hangi hesaba girdi (opsiyonel — boşsa maaştan mahsup edilir)',type:'select',opts:accOpts(CO,1)},
   {name:'desc',label:'Açıklama'}
