@@ -1409,7 +1409,7 @@ function purgeOldTrash(){ // 30 günden eski silinmiş kayıtları kalıcı olar
  }catch(e){}
 }
 
-const accOpts=(co,empty)=>{const l=byCo(S.accounts,co).filter(a=>a.active!=='0').map(a=>[a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name]);return empty?[['','— Seçin —']].concat(l):l;};
+const accOpts=(co,empty)=>{const l=byCo(S.accounts,co).filter(a=>a.active!=='0').map(a=>[a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' — bakiye '+fmt0(accBalance(a))]);return empty?[['','— Seçin —']].concat(l):l;}; /* v45: hangi hesabın ne kadarı var, seçerken görünsün */
 const cariOpts=co=>[['','— Cari yok —']].concat(byCo(S.cari,co).filter(c=>c.active!=='0'&&!c.sys).map(c=>[c.id,c.name])); /* v36: merkez/ortak sistem hesapları elle seçilemez */
 const catOpts=t=>S.cats[t].map(c=>[c,c]);
 
@@ -1479,10 +1479,13 @@ function rDash(){
 function txRow(x,click){
  const acc=S.accounts.find(a=>a.id===x.accId)||{};
  const _cr=x.cariId?S.cari.find(c=>c.id===x.cariId):null; // v14-A2: cari ve belge no eskiden hiç gösterilmiyordu
- const cls=x.type==='gelir'?'p':x.type==='gider'?'n':'g';
- const lbl=x.type==='virman'?'Virman':x.type==='gelir'?'Gelir':'Gider';
+ /* v45: transfer kayıtları artık yeşil "Gelir" / kırmızı "Gider" olarak değil,
+    nötr "⇄ Transfer" olarak gösterilir — personel bunu ciro sanıyordu. */
+ const _xf=!!x.xfer;
+ const cls=_xf?'g':x.type==='gelir'?'p':x.type==='gider'?'n':'g';
+ const lbl=x.type==='virman'?'Virman':_xf?(x.type==='gelir'?'⇄ Transfer (giriş)':'⇄ Transfer (çıkış)'):x.type==='gelir'?'Gelir':'Gider';
  const who=x.createdBy?(' · '+(x.updatedBy&&x.updatedBy!==x.createdBy?'düzenleyen: '+x.updatedBy:'ekleyen: '+x.createdBy)):'';
- return `<tr${click?` data-act="goTxDate" data-arg="${x.date}" style="cursor:pointer" title="O günün tüm işlemlerini aç"`:''}><td>${dTR(x.date)}</td><td><span class="chip ${cls}">${lbl}</span> ${esc(x.desc||'')}<div class="tiny">${acc.id?`<span data-act="accDetail" data-arg="${acc.id}" style="cursor:pointer;text-decoration:underline dotted" title="Hesap detayını aç">${esc(acc.name)}</span>`:esc(x.src==='card'?'Kredi kartı':x.src==='stok'?'Tahakkuk (stok)':'')}${esc(who)}${x.doc?' · 🧾 '+esc(x.doc):''}</div>${_cr?`<div class="tiny"><span class="chip g" data-act="cariDetail" data-arg="${_cr.id}" style="cursor:pointer" title="Cari detayını aç">👥 ${esc(_cr.name)}</span></div>`:''}</td><td class="hidem">${esc(x.cat||'')}</td><td class="num" style="color:${x.type==='gelir'?'var(--pos)':x.type==='gider'?'var(--neg)':'var(--ink2)'}">${x.type==='gider'?'-':''}${fmt(x.amount)}</td></tr>`;
+ return `<tr${click?` data-act="goTxDate" data-arg="${x.date}" style="cursor:pointer" title="O günün tüm işlemlerini aç"`:''}><td>${dTR(x.date)}</td><td><span class="chip ${cls}"${_xf?' title="Bu bir para transferidir — kâr/zarar tablosuna GİRMEZ"':''}>${lbl}</span> ${esc(x.desc||'')}<div class="tiny">${acc.id?`<span data-act="accDetail" data-arg="${acc.id}" style="cursor:pointer;text-decoration:underline dotted" title="Hesap detayını aç">${esc(acc.name)}</span>`:esc(x.src==='card'?'Kredi kartı':x.src==='stok'?'Tahakkuk (stok)':'')}${esc(who)}${x.doc?' · 🧾 '+esc(x.doc):''}</div>${_cr?`<div class="tiny"><span class="chip g" data-act="cariDetail" data-arg="${_cr.id}" style="cursor:pointer" title="Cari detayını aç">👥 ${esc(_cr.name)}</span></div>`:''}</td><td class="hidem">${esc(x.cat||'')}</td><td class="num" style="color:${x.type==='gelir'?'var(--pos)':x.type==='gider'?'var(--neg)':'var(--ink2)'}">${x.type==='gider'?'-':''}${fmt(x.amount)}</td></tr>`;
 }
 
 /* ---------- BANKA & KASA (kart görünümü + grafikler) ---------- */
@@ -1642,12 +1645,18 @@ function accEkstre(id,from,to){
 }
 
 /* ---------- GELİR-GİDER ---------- */
-var txFilter={type:'',cat:'',from:'',to:''};
+var txFilter={type:'',cat:'',from:'',to:'',kz:''};
+/* v45: bir kayıt kâr/zarar tablosuna giriyor mu? Transfer (merkez aktarımı, ortak sermayesi,
+   kredi kartı borcu ödemesi, virman) ve stok tahakkuku GELİR/GİDER DEĞİLDİR — sumRange bunları
+   zaten eliyordu ama İşlemler ekranının toplamları elemiyordu, bu yüzden ekrandaki "Gelir"
+   rakamı kâr/zarar tablosundan büyük çıkıyordu. */
+function txKZ(t){return !(t.xfer||t.type==='virman'||t.src==='stok');}
+function txSetKz(v){txFilter.kz=v;rTx();}
 function txSetType(v){txFilter.type=v;rTx();}
 function txSetCat(v){txFilter.cat=v;rTx();}
 function txSetFrom(v){txFilter.from=v;rTx();}
 function txSetTo(v){txFilter.to=v;rTx();}
-function txClear(){txFilter={type:'',cat:'',from:'',to:'',q:''};rTx();}
+function txClear(){txFilter={type:'',cat:'',from:'',to:'',q:'',kz:''};rTx();}
 function txSetQ(v){txFilter.q=v;rTx();}
 function filteredTxns(co,f){ // A13: rTx ve exportTxCsv AYNI filtreyi kullanir (q dahil)
  let list=S.txns.filter(t=>t.co===co&&!t.deletedAt);
@@ -1656,22 +1665,30 @@ function filteredTxns(co,f){ // A13: rTx ve exportTxCsv AYNI filtreyi kullanir (
  if(f.from)list=list.filter(t=>t.date>=f.from);
  if(f.to)list=list.filter(t=>t.date<=f.to);
  if(f.q){var _q=String(f.q).toLowerCase();list=list.filter(t=>String((t.desc||'')+' '+(t.doc||'')+' '+(t.cat||'')+' '+t.amount).toLowerCase().indexOf(_q)!==-1);}
+ if(f.kz==='kz')list=list.filter(txKZ); else if(f.kz==='xf')list=list.filter(t=>!txKZ(t)); /* v45 */
  return list;
 }
 function rTx(){
  let list=filteredTxns(CO,txFilter);
  const f=txFilter;
  list.sort((a,b)=>a.date<b.date?1:-1);
- const g=list.filter(t=>t.type==='gelir').reduce((s,t)=>s+ +t.amount,0);
- const x=list.filter(t=>t.type==='gider').reduce((s,t)=>s+ +t.amount,0);
+ /* v45: toplamlar artık kâr/zarar tablosuyla BİREBİR aynı — transferler ayrı kutuda */
+ const g=list.filter(t=>t.type==='gelir'&&txKZ(t)).reduce((s,t)=>s+ +t.amount,0);
+ const x=list.filter(t=>t.type==='gider'&&txKZ(t)).reduce((s,t)=>s+ +t.amount,0);
+ const trIn=list.filter(t=>!txKZ(t)&&t.type==='gelir').reduce((s,t)=>s+ +t.amount,0);
+ const trOut=list.filter(t=>!txKZ(t)&&t.type!=='gelir').reduce((s,t)=>s+ +t.amount,0);
+ const trN=list.filter(t=>!txKZ(t)).length;
  document.getElementById('main').innerHTML= topbar('Gelir - Gider',
   `<button class="btn gh" data-act="exportTxCsv" title="Filtrelenmiş listeyi Excel/CSV olarak indir">⬇ CSV</button><button class="btn gh" data-act="addTxnForm" data-arg="gelir">＋ Gelir</button><button class="btn" data-act="addTxnForm" data-arg="gider">＋ Gider</button>`)+
- `<div class="grid g3" style="margin-bottom:16px">
-  <div class="kpi p"><div class="l">Gelir (filtreli)</div><div class="v">${fmt0(g)}</div></div>
-  <div class="kpi n"><div class="l">Gider (filtreli)</div><div class="v">${fmt0(x)}</div></div>
-  <div class="kpi a"><div class="l">Net</div><div class="v">${fmt0(g-x)}</div></div></div>
+ `<div class="grid ${trN?'g4':'g3'}" style="margin-bottom:16px">
+  <div class="kpi p"><div class="l">Gelir (filtreli)</div><div class="v">${fmt0(g)}</div><div class="s">kâr/zarara giren</div></div>
+  <div class="kpi n"><div class="l">Gider (filtreli)</div><div class="v">${fmt0(x)}</div><div class="s">kâr/zarara giren</div></div>
+  <div class="kpi a"><div class="l">Net</div><div class="v">${fmt0(g-x)}</div><div class="s">Raporlar ekranıyla aynı</div></div>
+  ${trN?`<div class="kpi" style="border-left:3px solid #0c6b58"><div class="l">⇄ Transfer (K/Z dışı)</div><div class="v" style="font-size:16px">+${fmt0(trIn)} / −${fmt0(trOut)}</div><div class="s">${trN} kayıt — merkez aktarımı, ortak sermayesi, kart borç ödemesi, virman</div></div>`:''}</div>
+  ${trN?`<div class="card" style="margin-bottom:12px;background:var(--acc-soft)"><p class="tiny" style="margin:0">ℹ Bu listedeki <b>${trN} kayıt transferdir</b> (⇄ işaretli): para gerçekten hareket etti ama <b>gelir ya da gider değildir</b> — merkezden gelen aktarım, ortağın koyduğu sermaye, kredi kartı borç ödemesi ve virman gibi. Yukarıdaki Gelir/Gider kutuları bunları <b>saymıyor</b>; böylece rakamlar Kâr/Zarar tablosuyla birebir tutuyor.</p></div>`:''}
  <div class="card">
   <div class="filters">
+   <select data-actv="txSetKz" title="Transfer kayıtlarını göster/gizle"><option value="">Tüm kayıtlar</option><option ${f.kz==='kz'?'selected':''} value="kz">Yalnızca kâr/zarar kayıtları</option><option ${f.kz==='xf'?'selected':''} value="xf">Yalnızca ⇄ transferler</option></select>
    <select data-actv="txSetType"><option value="">Tümü</option><option ${f.type==='gelir'?'selected':''} value="gelir">Gelir</option><option ${f.type==='gider'?'selected':''} value="gider">Gider</option><option ${f.type==='virman'?'selected':''} value="virman">Virman</option></select>
    <select data-actv="txSetCat"><option value="">Tüm kategoriler</option>${Array.from(new Set(S.cats.gelir.concat(S.cats.gider).concat(byCo(S.txns,CO).map(t=>t.cat).filter(Boolean)))).map(c=>`<option ${f.cat===c?'selected':''}>${esc(c)}</option>`).join('')}</select>
    <input type="date" value="${f.from}" data-actv="txSetFrom">
@@ -1732,6 +1749,7 @@ function addTxnForm(type,init){
   if(_cari){var _bl=cariBalance(_cari);if(_cari.riskLimit&&_bl>+_cari.riskLimit)_bmsg=' ⚠ Risk limiti aşıldı: '+fmt(_bl);}
   save();toast((type==='gelir'?'Gelir kaydedildi':'Gider kaydedildi')+_cmsg+_bmsg);go(PAGE);
  },init||{});
+ odemeBakiyeBind(CO,{method:'accId',dir:type,hedef:type==='gelir'?'Para bu hesaba girecek':'Para bu hesaptan çıkacak'}); /* v45 */
 }
 function addTxnFromAcc(type,accId){ addTxnForm(type,{accId:accId}); } // v26: bir hesap kartından doğrudan gelir/gider eklerken o hesabı ön-seçili getirir
 function editTxn(id){
@@ -1943,7 +1961,8 @@ function cardTxnForm(cardId,type){
      {row:[{name:'vat',label:'KDV %',type:'select',opts:[['','KDV yok'],['1','%1'],['10','%10'],['20','%20']]},{name:'cariId',label:'İlgili cari / tedarikçi (opsiyonel)',type:'select',opts:cariOpts(CO)}]},{name:'desc',label:'Açıklama',ph:'Ör: Metro toptan alışveriş'}]
   : [{row:[{name:'amount',label:'Ödeme tutarı (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
      {name:'accId',label:'Hangi hesaptan ödendi',type:'select',opts:accOpts(CO),req:1}];
- openForm(type==='harcama'?'Kart Harcaması':'Kart Ödemesi',flds,o=>{
+ var _cardOfForm=S.cards.find(function(z){return z.id===cardId;})||{};
+ openForm(type==='harcama'?'Kart Harcaması — '+(_cardOfForm.name||'')+' (borç '+fmt0(Math.max(0,cardDebt(_cardOfForm)))+')':'Kart Ödemesi — '+(_cardOfForm.name||'')+' (borç '+fmt0(Math.max(0,cardDebt(_cardOfForm)))+')',flds,o=>{
   var cdid=nid();
   var ctid=''; // A12: kart ekranindan tedarikci secilirse cari bakiyeye de islensin
   if(type==='harcama'&&o.cariId){
@@ -1976,6 +1995,30 @@ function cardTxnForm(cardId,type){
   }
   save();toast(type==='harcama'?((+o.taksit||1)>1?'Harcama eklendi — gider '+o.taksit+' aya bölündü (aylık ~'+fmt0((+o.amount)/(+o.taksit))+')':'Harcama eklendi'):'Ödeme kaydedildi');go('card');
  });
+ /* v45: kart ekranındaki formlarda da canlı önizleme */
+ if(type==='odeme'){
+  odemeBakiyeBind(CO,{method:'accId',dir:'gider',hedef:'Kart borcu bu hesaptan ödenecek'});
+  formBind(function(){
+   var c2=S.cards.find(function(z){return z.id===cardId;});if(!c2)return;
+   var amt=parseAmt(fldVal('amount'))||0,eski=cardDebt(c2),kalan=eski-amt;
+   var el=document.getElementById('mNote');if(!el)return;
+   var ek='<div class="nvTitle">💳 '+esc(c2.name)+' kart borcu</div><ul class="nvList"><li>Borç: <b>'+fmt0(eski)+'</b> <b class="nvPos">−'+fmt0(amt)+'</b> → <b>'+fmt0(kalan)+'</b></li>'+
+    '<li>Bu ödeme <b>GİDER SAYILMAZ</b> — harcamalar kartla alışveriş anında zaten gider yazılmıştı</li></ul>'+
+    (amt>eski+0.01?'<div class="nvWarn"><div>⚠ Kart borcundan FAZLA ödeme yapıyorsunuz (borç '+fmt0(eski)+')</div></div>':'');
+   el.innerHTML=ek+el.innerHTML;
+  });
+ }else{
+  formBind(function(){
+   var c2=S.cards.find(function(z){return z.id===cardId;});if(!c2)return;
+   var amt=parseAmt(fldVal('amount'))||0,N=+fldVal('taksit')||1,eski=cardDebt(c2),yeni=eski+amt;
+   var rows=['Borç: <b>'+fmt0(eski)+'</b> <b class="nvNeg">+'+fmt0(amt)+'</b> → yeni borç <b>'+fmt0(yeni)+'</b>'],warns=[];
+   if(+c2.limit>0){var kl=+c2.limit-yeni;rows.push('Kalan limit: <b class="'+(kl<0?'nvNeg':'nvPos')+'">'+fmt0(kl)+'</b>');
+    if(kl<0)warns.push('Kart limiti aşılıyor (limit '+fmt0(c2.limit)+')');}
+   if(N>1)rows.push('Gider <b>'+N+' aya</b> bölünecek — aylık ~<b>'+fmt0(amt/N)+'</b>');
+   rows.push('Kasadan para <b>çıkmaz</b> — borç karta biner');
+   formNote(nvPrev(esc(c2.name)+' harcaması',rows,warns));
+  });
+ }
 }
 function cardStatementRange(c,ref){ // v14-Y3: cutDay zorunlu alandı ama hiçbir hesaba girmiyordu
  var cd=+c.cutDay||1, d=ref?new Date(ref):new Date();
@@ -2154,6 +2197,7 @@ function cariTxnForm(cariId,defType,init){
   var upd=function(){fld.style.display=nk.value?'':'none';};
   nk.addEventListener('change',upd);upd();
  },80);
+ odemeBakiyeBind(CO,{dirField:'nakit',hedef:'Seçilen hesabın durumu'}); /* v45 */
 }
 /* v27: FATURALAŞTIR — cari hareketin ÜZERİNE, resmi fatura bilgilerini (no, KDV) ekleyen özel bir giriş yolu.
    Bakiye hesaplaması hâlâ AYNI test edilmiş cariTxns/cariBalance mekanizmasını kullanır — buraya dokunulmadı,
@@ -2395,6 +2439,7 @@ function staffPayForm(staffId,init){
   }
   save();toast('Kayıt eklendi'+(isCard?' — kredi kartına işlendi':''));go('staff');
  },init||{});
+ odemeBakiyeBind(CO,{dir:'gider',hedef:'Maaş/avans bu hesaptan çıkacak'}); /* v45 */
 }
 /* v33: TOPLU MAAS DONEMI — tum aktif personelin maasini tek adimda isler (avans/kesinti mahsuplu) */
 function maasDonemi(){
@@ -2576,6 +2621,7 @@ function payFixed(fid){
   pushRec(S.fixedLogs,{id:nid(),co:CO,fixedId:fid,period:o.period,amount:+o.amount,paidDate:o.paidDate,txnId:tx.id});
   save();toast(f.name+' ödendi olarak işaretlendi'+(isCard?' — kredi kartına işlendi':'')+(ctid?' + cariye işlendi':''));go('fixed');
  });
+ odemeBakiyeBind(CO,{dir:'gider',hedef:'Sabit ödeme bu hesaptan çıkacak'}); /* v45 */
 }
 function fixedHist(fid){
  const f=S.fixed.find(x=>x.id===fid);if(!f)return;
@@ -5376,8 +5422,9 @@ function fixOrphanTxn(id){
 /* Cari ödeme/tahsilat yöntemi: kasa/banka hesapları + kredi kartları (v10.5) */
 function payMethodOpts(co,withMerkez){
  var l=[['','— Seçin —']];
- byCo(S.accounts,co).filter(function(a){return a.active!=='0';}).forEach(function(a){l.push([a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name]);});
- byCo(S.cards,co).filter(function(c){return c.active!=='0';}).forEach(function(c){l.push(['card:'+c.id,'💳 '+c.name+' (kredi kartı)']);});
+ /* v45: seçim anında bakiye / kart borcu etiketin içinde görünsün */
+ byCo(S.accounts,co).filter(function(a){return a.active!=='0';}).forEach(function(a){l.push([a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' — bakiye '+fmt0(accBalance(a))]);});
+ byCo(S.cards,co).filter(function(c){return c.active!=='0';}).forEach(function(c){l.push(['card:'+c.id,'💳 '+c.name+' — borç '+fmt0(Math.max(0,cardDebt(c)))+(+c.limit>0?' / limit '+fmt0(c.limit):'')]);});
  if(withMerkez&&typeof merkezOpts==='function')l=l.concat(merkezOpts(co)); /* v40: "🏛 MERKEZ ÖDER" seçenekleri */
  return l;
 }
@@ -5463,14 +5510,16 @@ function runIntegrity(mode){
   return;
  }
  window.__integRes=res;
- var onarSayisi=res.filter(function(r){return integrityOnarilabilir(r.title);}).length;
+ var onarSayisi=res.filter(function(r){return integrityOnarilabilir(r.title)||INTEG_XFER_FIX[r.title];}).length; /* v45 */
  el.innerHTML='<p class="tiny" style="color:var(--neg);margin-bottom:8px"><b>'+res.length+' tür bulgu tespit edildi</b>'+(onarSayisi?' — '+onarSayisi+' tanesi tek tuşla onarılabilir (🔧).':' — her satırdaki "Git" ile ilgili ekrana gidip düzeltin.')+'</p>'+
   '<div style="overflow-x:auto"><table><thead><tr><th>Bulgu</th><th class="num">Adet</th><th class="rowact"></th></tr></thead><tbody>'+
   res.map(function(r,i){
-   var onar=integrityOnarilabilir(r.title)?'<button class="btn sm" data-act="onarIntegrity" data-arg="'+i+'" title="Eşi/üstü silinmiş bu yetim kayıtları çöp kutusuna taşır — geri alınabilir">🔧 Onar</button>':'';
+   var onar=INTEG_XFER_FIX[r.title]
+    ?'<button class="btn sm" data-act="onarXfer" data-arg="'+i+'" title="Kayıtları SİLMEZ — yalnızca “transfer” olarak işaretler, böylece kâr/zarar tablosuna girmezler">🔧 Transfer olarak işaretle</button>'
+    :(integrityOnarilabilir(r.title)?'<button class="btn sm" data-act="onarIntegrity" data-arg="'+i+'" title="Eşi/üstü silinmiş bu yetim kayıtları çöp kutusuna taşır — geri alınabilir">🔧 Onar</button>':'');
    return '<tr><td><b>'+esc(r.title)+'</b><div class="tiny">'+esc(r.detail)+'</div></td><td class="num"><span class="chip n">'+r.n+'</span></td><td class="rowact">'+onar+'<button class="btn sm gh" data-act="go" data-arg="'+r.pg+'">Git →</button></td></tr>';}).join('')+'</tbody></table></div>'+
   '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'+(onarSayisi?'<button class="btn sm" data-act="onarIntegrity" data-arg="hepsi">🔧 Onarılabilir '+onarSayisi+' bulguyu birden onar</button>':'')+'<button class="btn sm gh" data-act="integrityRapor">📋 Raporu Kopyala</button></div>'+
-  '<p class="tiny" style="margin-top:8px">🔧 Onarım yalnızca <b>eşi veya üst kaydı zaten silinmiş</b> yetim kayıtları çöp kutusuna taşır (silme kaskadının yapması gerekeni tamamlar) — 30 gün içinde geri alınabilir. Tutar/kategori gibi insan kararı gerektiren bulgularda düğme çıkmaz.</p>';
+  '<p class="tiny" style="margin-top:8px">🔧 Onarım yalnızca <b>eşi veya üst kaydı zaten silinmiş</b> yetim kayıtları çöp kutusuna taşır (silme kaskadının yapması gerekeni tamamlar) — 30 gün içinde geri alınabilir. Tutar/kategori gibi insan kararı gerektiren bulgularda düğme çıkmaz.<br>“<b>Transfer olarak işaretle</b>” düğmesi hiçbir kaydı silmez: merkez aktarımı / ortak sermayesi gibi para hareketlerini kâr/zarar tablosunun dışına alır, bakiyelere dokunmaz.</p>';
  if(mode!=='auto')toast('⚠ '+res.length+' tür bulgu bulundu — liste güncellendi');
 }
 
@@ -5636,8 +5685,8 @@ function exportTxCsv(){
  if(!list.length){toast('Filtreye uyan kayıt yok');return;}
  var accN=function(id){var x=S.accounts.find(function(k){return k.id===id;});return x?x.name:'';};
  var q=function(v){v=String(v==null?'':v);return '"'+v.replace(/"/g,'""')+'"';};
- var rows=[['Tarih','Tür','Kategori','Hesap','Tutar','KDV %','Belge No','Açıklama','Ekleyen'].join(';')];
- list.forEach(function(t){rows.push([t.date,t.type==='gelir'?'Gelir':t.type==='gider'?'Gider':'Virman',q(t.cat||''),q(accN(t.accId)||(t.src==='card'?'Kredi kartı':'')),String(+t.amount).replace('.',','),t.vat||'',q(t.doc||''),q(t.desc||''),q(t.createdBy||'')].join(';'));});
+ var rows=[['Tarih','Tür','Kategori','Hesap','Tutar','KDV %','Belge No','Açıklama','Ekleyen','Kâr/Zarara Dahil'].join(';')];
+ list.forEach(function(t){rows.push([t.date,t.type==='gelir'?(t.xfer?'Transfer (giriş)':'Gelir'):t.type==='gider'?(t.xfer?'Transfer (çıkış)':'Gider'):'Virman',q(t.cat||''),q(accN(t.accId)||(t.src==='card'?'Kredi kartı':t.src==='merkez'?'🏛 Merkez':t.src==='merkez-kart'?'🏛 Merkez kartı':'')),String(+t.amount).replace('.',','),t.vat||'',q(t.doc||''),q(t.desc||''),q(t.createdBy||''),txKZ(t)?'Evet':'Hayır'].join(';'));});
  var blob=new Blob(['﻿'+rows.join('\r\n')],{type:'text/csv;charset=utf-8'});
  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lole-islemler-'+(coName(CO)||'').replace(/\s+/g,'-')+'-'+todayISO()+'.csv';document.body.appendChild(a);a.click();a.remove();
  try{logAudit('CSV dışa aktarım',list.length+' kayıt');}catch(e){}
@@ -5749,6 +5798,29 @@ function taskTakip(){
 /* ---- v15: TUTARLILIK DENETİMİ ONARIM ARACI ---- */
 var INTEG_ONAR={'Tek taraflı silinmiş bağlantı':1,'Çeki silinmiş işlem':1,'Çek-cari bağı kopuk':1,'Nakit üretmiş ama işlemi olmayan kayıt':1,'Stok bağı kopuk kayıt':1,'Demirbaşı silinmiş kayıt':1,'POS tanımı silinmiş giriş':1,'Tanımı silinmiş sabit ödeme kaydı':1,'Carisi silinmiş cari hareketi':1,'Kartı silinmiş kart hareketi':1,'Bağlı cari kaydı silinmiş gelir/gider':1,'Yarım silinmiş taksit grubu':1,'POS "geçti" ama gelir kaydı yok':1,'Yarım kalmış merkez işlemi':1};
 function integrityOnarilabilir(t){return !!INTEG_ONAR[t];}
+/* v45: bu bulgu SİLİNEREK değil, kayda "transfer" işareti KONARAK onarılır.
+   Eski sürümlerde girilen merkez aktarımı / ortak sermayesi kayıtlarında bu işaret yoktu;
+   bu yüzden kâr/zarar tablosunda gelir ya da gider gibi görünüyorlardı. */
+var INTEG_XFER_FIX={'Transfer kaydı kâr/zarara girmiş':1};
+function onarXfer(i){
+ if(!isSuper()){toast('Onarım yalnızca süper yöneticiye açıktır');return;}
+ var res=window.__integRes||[],r=res[+i];
+ if(!r||!INTEG_XFER_FIX[r.title]){toast('Onarılacak bulgu bulunamadı — listeyi yenileyin');return;}
+ var items=(r.items||[]).filter(function(t){return t&&!t.deletedAt&&!t.xfer&&t.type!=='virman';});
+ if(!items.length){toast('Düzeltilecek kayıt kalmamış');return;}
+ var gel=items.filter(function(t){return t.type==='gelir';}).reduce(function(a,t){return a+ +t.amount;},0);
+ var gid=items.filter(function(t){return t.type==='gider';}).reduce(function(a,t){return a+ +t.amount;},0);
+ uiConfirm(items.length+' kayıt "transfer" olarak işaretlenecek. Bunlar merkez aktarımı / ortak sermayesi gibi para hareketleridir; '+
+  'GELİR ya da GİDER değildirler. İşlemden sonra kâr/zarar tablosundan '+fmt0(gel)+' gelir ve '+fmt0(gid)+' gider düşecek — '+
+  'kasa ve banka bakiyeleri DEĞİŞMEZ. Devam edilsin mi?',
+ function(){
+  items.forEach(function(t){ t.xfer=true; try{stampUpdate(t,t);}catch(e){} });
+  save();
+  try{logAudit('Transfer işareti onarımı',items.length+' kayıt · gelir '+fmt0(gel)+' · gider '+fmt0(gid));}catch(e){}
+  toast('✅ '+items.length+' kayıt transfer olarak işaretlendi — kâr/zarar tablosu düzeldi');
+  go(PAGE);
+ });
+}
 function _integKind(rec){
  var M=[[S.txns,'tx'],[S.cariTxns,'cariT'],[S.cardTxns,'cardT'],[S.staffTxns,'staffT'],[S.posEntries,'posE'],[S.fixedLogs,'fixedL'],[S.cheques,'cek'],[S.stockTxns,'stokT'],[S.assets,'asset'],[S.cari,'cari'],[S.cards,'card'],[S.pos,'pos']];
  for(var i=0;i<M.length;i++){ if(M[i][0]&&M[i][0].indexOf(rec)!==-1) return {arr:M[i][0],kind:M[i][1]}; }
@@ -5989,9 +6061,9 @@ function merkezOpts(co){ /* şirket içi formlarda "merkez öder" seçenekleri *
  if(typeof canAccessCo!=='function'||!canAccessCo('merkez'))return [];
  var l=[];
  byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).forEach(function(a){
-  l.push(['merkez:'+a.id,'🏛 MERKEZ ÖDER — '+(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' (merkeze borçlanırız)']);});
+  l.push(['merkez:'+a.id,'🏛 MERKEZ ÖDER — '+(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' — bakiye '+fmt0(accBalance(a))]);});
  byCo(S.cards,'merkez').filter(function(c){return c.active!=='0';}).forEach(function(c){
-  l.push(['merkez:card:'+c.id,'🏛 MERKEZ ÖDER — 💳 '+c.name+' (merkeze borçlanırız)']);});
+  l.push(['merkez:card:'+c.id,'🏛 MERKEZ ÖDER — 💳 '+c.name+' — borç '+fmt0(Math.max(0,cardDebt(c)))]);});
  return l;
 }
 
@@ -6573,8 +6645,15 @@ function merkezChecks(){
  var xferBad=S.txns.filter(function(t){
   if(t.deletedAt||!canAccessCo(t.co))return false;
   if(t.xfer||t.type==='virman')return false;
-  return t.cat==='Grup İçi'||t.cat==='Ortak / Sermaye';});
- A('Transfer kaydı kâr/zarara girmiş','“Grup İçi” veya “Ortak / Sermaye” kategorisindeki bir kayıt transfer olarak işaretlenmemiş — kâr/zarar tablosunda olmayan bir gelir ya da gider olarak görünür.','tx',xferBad);
+  if(t.cat==='Grup İçi'||t.cat==='Ortak / Sermaye')return true;
+  /* v45: kredi kartı BORÇ ÖDEMESİ gider değildir (harcama zaten gider yazılmıştı) —
+     eski sürümlerde bu kayıtlara xfer işareti konmuyordu, gider iki kat görünüyordu. */
+  if(t.cardTxnId&&t.type==='gider'&&t.accId){
+   var _ct=S.cardTxns.find(function(z){return z.id===t.cardTxnId&&!z.deletedAt;});
+   if(_ct&&_ct.type==='odeme')return true;
+  }
+  return false;});
+ A('Transfer kaydı kâr/zarara girmiş','“Grup İçi” / “Ortak / Sermaye” kategorisindeki ya da bir kredi kartı borcu ödemesine bağlı kayıt transfer olarak işaretlenmemiş — kâr/zarar tablosunda olmaması gereken bir gelir ya da gider olarak görünür.','tx',xferBad);
  A('Grup içi işaret eksik kayıt','Merkez hesabına ait bir hareket “grup içi” olarak işaretlenmemiş — grup raporunda çifte sayılabilir.','merkez',icBad);
  return out;
 }
@@ -6620,6 +6699,59 @@ function merkezMukerrer(coId,amount,date,icIdHaric){
  return S.cariTxns.filter(function(t){
   return t.co==='merkez'&&t.cariId===mc.id&&!t.deletedAt&&t.type==='borc'&&
    t.date===date&&Math.abs(+t.amount-(+amount||0))<0.01&&(!icIdHaric||t.icId!==icIdHaric);}).length;
+}
+
+/* ---------- v45: ŞİRKET İÇİ ÖDEME FORMLARINDA CANLI BAKİYE / BORÇ ÖNİZLEMESİ ----------
+   Şikayet: "Şirketten banka/kasa seçince o kasanın bakiyesini ya da borcunu açılan kartta göstermiyor."
+   Merkez ekranlarında bu önizleme vardı (merkezOdeBind), şirket içi formlarda YOKTU.
+   opt: {method:'alan adı', amount:'alan adı', dir:'gider'|'gelir', dirField:'nakit', hedef:'açıklama'} */
+function odemeBakiyeBind(coId,opt){
+ opt=opt||{};
+ var MF=opt.method||'method', AF=opt.amount||'amount';
+ formBind(function(){
+  var m=fldVal(MF)||'';
+  var dir=opt.dirField?(fldVal(opt.dirField)||''):(opt.dir||'gider');
+  var amt=parseAmt(fldVal(AF))||0;
+  if(!m||!dir){formNote('');return;}
+  var rows=[],warns=[];
+  if(isMerkezMethod(m)){
+   var mm=merkezMethodOf(m),mCard=String(mm).indexOf('card:')===0;
+   if(mCard){
+    var mc=S.cards.find(function(z){return z.id===String(mm).slice(5);});
+    var mYeni=(mc?cardDebt(mc):0)+amt;
+    rows.push('<b>🏛 Merkez</b> '+esc(cardNameOf(String(mm).slice(5)))+' kart borcu: '+fmt0(mc?cardDebt(mc):0)+' → <b>'+fmt0(mYeni)+'</b>');
+    if(mc&&+mc.limit>0&&mYeni>+mc.limit)warns.push('Merkez kart limiti aşılıyor (limit '+fmt0(mc.limit)+')');
+   }else{
+    var ma=S.accounts.find(function(z){return z.id===mm;});
+    var mKalan=(ma?accBalance(ma):0)-amt;
+    rows.push('<b>🏛 Merkez</b> '+esc(accNameOf(mm))+': '+fmt0(ma?accBalance(ma):0)+' <b class="nvNeg">−'+fmt0(amt)+'</b> → kalan <b>'+fmt0(mKalan)+'</b>');
+    if(mKalan<0)warns.push('Merkez hesabı eksiye düşecek ('+fmt0(mKalan)+')');
+   }
+   var _mb=(typeof coMerkezBorc==='function')?coMerkezBorc(coId):0;
+   rows.push('<b>'+esc(coName(coId))+'</b> merkeze borç: '+fmt0(_mb)+' → <b>'+fmt0(_mb+amt)+'</b> (şirketin kasasına <b>dokunulmaz</b>)');
+   formNote(nvPrev('Bu ödemeyi MERKEZ yapacak',rows,warns));return;
+  }
+  if(String(m).indexOf('card:')===0){
+   var cid=String(m).slice(5),c=S.cards.find(function(z){return z.id===cid;});
+   var eski=c?cardDebt(c):0;
+   if(dir==='gelir'){warns.push('Kredi kartı tahsilat için kullanılamaz — kasa/banka seçin');}
+   else{
+    rows.push(esc(cardNameOf(cid))+' borç: <b>'+fmt0(eski)+'</b> <b class="nvNeg">+'+fmt0(amt)+'</b> → yeni borç <b>'+fmt0(eski+amt)+'</b>');
+    if(c&&+c.limit>0){var kal=+c.limit-(eski+amt);
+     rows.push('Kalan limit: <b class="'+(kal<0?'nvNeg':'nvPos')+'">'+fmt0(kal)+'</b>');
+     if(kal<0)warns.push('Kart limiti aşılıyor (limit '+fmt0(c.limit)+')');}
+    rows.push('Kasadan para çıkmaz — borç karta biner');
+   }
+   formNote(nvPrev('Kredi kartıyla ödeme',rows,warns));return;
+  }
+  var a=S.accounts.find(function(z){return z.id===m;});
+  if(!a){formNote('');return;}
+  var bal=accBalance(a), yeni=dir==='gelir'?bal+amt:bal-amt;
+  rows.push(esc(accNameOf(a.id))+' bakiye: <b>'+fmt0(bal)+'</b> <b class="'+(dir==='gelir'?'nvPos':'nvNeg')+'">'+(dir==='gelir'?'+':'−')+fmt0(amt)+'</b> → <b>'+fmt0(yeni)+'</b>');
+  if(dir!=='gelir'&&yeni<0)warns.push('Bu hesap eksiye düşecek ('+fmt0(yeni)+') — doğru kasayı seçtiğinizden emin olun');
+  if(dir!=='gelir'&&amt>0&&bal>0&&yeni>=0&&yeni<bal*0.1)warns.push('Bu ödemeden sonra hesapta çok az para kalıyor ('+fmt0(yeni)+')');
+  formNote(nvPrev(opt.hedef||'Seçilen hesabın durumu',rows,warns));
+ });
 }
 
 /* ---------- MERKEZDEN ÖDEME: dinamik alanlar + önizleme ---------- */
