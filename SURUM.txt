@@ -1,6 +1,47 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v45  (08.09.2026)  Transferler gelir/gider sayilmiyor + odeme formlarinda bakiye
+     HATA 1: Islemler (Gelir-Gider) ekranindaki Gelir/Gider kutulari transfer
+     kayitlarini da sayiyordu. Raporlar ekrani saymadigi icin ayni sirkette iki
+     ekran farkli rakam gosteriyordu. Merkezden gelen para "gelir" gibi
+     gorunuyordu; kredi karti borc odemesi de gideri iki kat gosteriyordu.
+     YENI: - Gelir/Gider/Net kutulari artik Raporlar ekraniyla birebir ayni
+           - Ayri "Transfer (K/Z disi)" kutusu (giris / cikis / adet)
+           - Satirlar yesil "Gelir" yerine notr "Transfer (giris/cikis)"
+           - Filtre: Tum kayitlar / Yalnizca kar-zarar / Yalnizca transferler
+           - CSV'ye "Kar/Zarara Dahil" sutunu
+           - Denetim eski kredi karti odemelerini de yakaliyor
+           - Yeni onarim: "Transfer olarak isaretle" - kaydi SILMEZ, sadece
+             isaretler; bakiyeler degismez, kar/zarar duzelir
+     HATA 2: Sirket ici odeme formlarinda secilen kasanin bakiyesi ya da kartin
+     borcu hicbir yerde gorunmuyordu (merkez ekranlarinda vardi).
+     YENI: - Hesap listelerinde bakiye yaziyor:
+             "Rest Kasa - bakiye 163.000", "Rest Kart - borc 12.000 / limit 50.000",
+             "MERKEZ ODER - Merkez Banka - bakiye 925.000"
+           - Hesap secilince formun altinda canli onizleme:
+             bakiye -> odeme -> kalan; kart borcu -> yeni borc -> kalan limit;
+             merkez secilirse merkez bakiyesi + sirketin merkeze borcu
+           - Uyarilar: hesap eksiye dusuyor, kart limiti asiliyor,
+             kart borcundan fazla odeme, hesapta cok az para kaliyor
+           - Eklendigi ekranlar: Gelir/Gider, Cari, Personel, Sabit odeme,
+             Kart harcamasi, Kart odemesi
+     45 yeni test + mevcut 490 = 535 otomatik test gecti.
+
+v44  (07.09.2026)  Aylik maas donemi
+     HATA: Personel ekrani icinde bulunulan aya kilitliydi; ay atlayinca gecen
+     ayin odenmemis maasi icin personelin karti secilemiyordu. Ayrica odemeler
+     ODEME TARIHINE gore sayiliyordu, DONEM alanina gore degil - Eylulde odenen
+     Agustos maasi Eylule yaziliyor, Agustos hala odenmemis gorunuyordu.
+     YENI: - Donem secici: "< Eylul 2026 >" + "Bu aya don"
+           - "Odenmemis Gecmis Maaslar" karti: son 12 ayda maas kaydi olmayan
+             personel/donem ciftleri. Her satirda "Ode" (donemi otomatik doldurur)
+             ve "Donemi Ac" dugmesi
+           - KPI, personel kartlari ve % ilerleme secili doneme gore hesaplaniyor
+           - Donem ile odeme tarihi artik AYRI: 7 Eylul'de yapilan Agustos
+             odemesinde gider Agustos'a, kasa cikisi Eylul'e yazilir
+     30 yeni test + mevcut 460 = 490 otomatik test gecti.
+
 v43  (05.09.2026)  Ortak katki dagilimi raporu duzeltildi
      HATA: "Ortak Katkilarinin Sirketlere Dagilimi" tablosu yalnizca merkezden
      GIDEN parayi topluyor, sirketten GERI GELEN tahsilatlari hic dusmuyordu.
