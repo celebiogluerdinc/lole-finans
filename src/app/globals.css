@@ -285,7 +285,11 @@ tbody tr{transition:background .12s}tbody tr:hover{background:#f6f8fc}
 .uHello:empty{display:none}
 .tfoot td{background:var(--acc-soft);border-top:2px solid var(--acc);font-weight:700}
 #printArea{display:none}
-body.print-report #app,body.print-report #selectScreen,body.print-report .bnav,body.print-report .toast{display:none!important}
+/* v46: yazdırma sırasında ekranın TAMAMI gizlenir — eskiden #aiFab (✦ yüzen düğme),
+   açık modal ve "daha fazla" paneli raporun üstüne basılıyordu. */
+body.print-report #app,body.print-report #selectScreen,body.print-report #loginScreen,
+body.print-report .bnav,body.print-report .toast,body.print-report #aiFab,
+body.print-report #modalWrap,body.print-report #moreSheet{display:none!important}
 body.print-report{background:#fff}
 body.print-report #printArea{display:block;max-width:900px;margin:0 auto;padding:20px;font-size:12.5px}
 #printArea h1{font-size:21px;border-bottom:3px solid var(--shell);padding-bottom:8px;margin-bottom:6px}
@@ -295,7 +299,27 @@ body.print-report #printArea{display:block;max-width:900px;margin:0 auto;padding
 #printArea th,#printArea td{border:1px solid #d8deea;padding:5px 8px;text-align:left}
 #printArea th{background:#eef1f6}
 #printArea td:nth-child(n+2),#printArea th:nth-child(n+2){text-align:right}
-@media print{.side,.bnav,.btn,.filters,.rowact,.seg,.tabs{display:none!important}.main{margin:0}body{background:#fff}.card{box-shadow:none;border:1px solid #ddd}}
+/* v46: uzun ekstreler sayfaya bölünürken tablo başlığı her sayfada tekrarlansın,
+   bir satır iki sayfaya bölünmesin */
+#printArea thead{display:table-header-group}
+#printArea tfoot{display:table-footer-group}
+#printArea tr{page-break-inside:avoid}
+#printArea table{page-break-inside:auto}
+#printArea h2{page-break-after:avoid}
+#printArea .card{border:0;box-shadow:none;padding:0;margin:0 0 10px;background:transparent}
+#printArea .chip{border:1px solid #ccc;padding:1px 5px;font-size:10.5px;border-radius:4px;background:#f6f8fb;color:#222}
+#printArea .kpi{border:1px solid #d8deea;padding:6px 10px;display:inline-block;margin:0 6px 6px 0;min-width:150px}
+#printArea .grid{display:block}
+#printArea .empty,#printArea .tiny{font-size:10.5px;color:#555}
+/* v46: doğrudan Ctrl+P ile yazdıranlar için de ekran öğeleri gizlensin */
+@media print{
+ .side,.bnav,.btn,.filters,.rowact,.seg,.tabs,.topbar,.userChip,.coSwitch,#saveBadge,#aiFab,#modalWrap,#moreSheet{display:none!important}
+ .main{margin:0}
+ .main>*{animation:none!important;opacity:1!important;transform:none!important}
+ body{background:#fff}
+ .card{box-shadow:none;border:1px solid #ddd;break-inside:avoid}
+ table{page-break-inside:auto}tr{page-break-inside:avoid}thead{display:table-header-group}
+}
 
 
 /* ===== v11 TASARIM GÜNCELLEMESİ (tasarım ekibi kararları) ===== */

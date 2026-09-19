@@ -1,6 +1,64 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v46  (19.09.2026)  Yetki sistemi, yazdirma, cari ekrani, islem gecmisi
+     ---- 1. YETKI: uc kademeli rol + kalem kalem izin ----
+     HATA (buyuk): Silme ve duzenleme HICBIR yetki kontrolunden gecmiyordu.
+     Erisimi olan sirketteki bir "kullanici" her kaydi silebiliyor, her tutari
+     degistirebiliyordu. 13 duzenleme formunda kontrol yoktu.
+     YENI: - Ucuncu rol: MUDUR. super / mudur / user
+           - Kullanici rolunde DUZENLEME ve SILME kapali (kayit girme acik)
+           - Mudur: kayit girer/duzenler/siler + KULLANICI YONETIR
+             (super yoneticiye dokunamaz, yedek geri yukleyemez)
+           - 17 izin kalemi: kayit ekle/duzenle/sil, tanim duzenle/sil/pasif,
+             merkez ode/dagit, ortak islem, kullanici yonet, kategori,
+             cop kutusu, denetim onar, rapor disa aktar
+           - Kullanici yonetimi panelinde her izin ayri onay kutusu,
+             tabloda "Neler Yapabilir" sutunu ve rol rehberi
+           - Tek yetki kapisi can(): del(), softDelete() ve 39 fonksiyon
+     DENETIM DUZELTMELERI (kod incelemesinde bulundu):
+           - Mudur kendi sirket erisimini yukseltebiliyordu -> kapatildi
+           - Pasife alma / kayit ekleme / cek-POS islemleri kontrolsuzdu
+           - co alani bos eski kayitlar sirket sinirini asabiliyordu
+
+     ---- 2. YAZDIRMA: sayfa degil, ICERIK basiliyor ----
+     HATA: "Yazdir" tum ekrani basiyordu (ust baslik, KPI kutulari, yuzen
+     dugme). Kullanici cari ekstresi istiyor, eline sayfa goruntusu geciyordu.
+     YENI: - printSection(): yalnizca ilgili bolumu basar
+           - Basliga sirket adi, rapor adi, tarih araligi, yazdiran kisi
+           - Dugme/filtre temizlenir; BILGI etiketleri ve satirlar KORUNUR
+           - Kart ekstresi, personel dokumu, sabit odeme gecmisine de eklendi
+           - Uzun ekstrede tablo basligi her sayfada tekrarlanir
+
+     ---- 3. CARI EKRANI ----
+     YENI: - Kartlar BAKIYE BUYUKLUGUNE gore sirali (6 siralama secenegi)
+           - Arama kutusu (isim, telefon, vergi no, e-posta)
+           - KART / LISTE gorunum secimi
+           - "Yalnizca ALACAKLILAR" / "Yalnizca BORCLULAR" filtresi
+           - KPI kutulari tiklanabilir: "Toplam Alacagimiz"a tiklayinca
+             alacaklilar listelenir
+           - Listeyi Yazdir (ekstre gibi) + CSV disa aktarim
+           - Kartlarda gecikmis tutar, gecikme gunu, hareket sayisi, son islem
+           - Performans: bakiyeler TEK GECISTE hesaplaniyor (200 caride donma)
+
+     ---- 4. YENI SEKME: ISLEM GECMISI ----
+     Butun defterler tek listede, en yeni ustte: gelir-gider, cari, kart,
+     personel, POS, sabit odeme, cek/senet, stok, demirbas, izin.
+     Filtreler: defter, islem turu, tarih araligi, kaydeden kisi, arama.
+     Yazdirilabilir + CSV. "Sonradan duzenlenen" kayitlar isaretli.
+
+     ---- 5. DRILL-DOWN: her rakam ve kayit tiklanabilir ----
+     HATA: Bir gider islemine tiklayinca bagli hesaba gidilemiyordu.
+     YENI: - Her islem satirinda bagli hesap/cari/kart/personel/cek/POS/
+             stok/demirbas cipleri — tek tikla o kayda gider
+           - Grup ici islemlerde "karsi kayitlar" penceresi
+           - Tiklanabilir toplamlar: islem listesi, kart borcu, personel,
+             cek, sabit odeme, stok, demirbas, butce, hesap detayi
+           - Kredi kartlari BORC BUYUKLUGUNE gore sirali; "Toplam Kart
+             Borcu"na tiklayinca yalnizca borclu kartlar
+           - Cek ekraninda KPI kutulari listeyi suzuyor
+     137 yeni test + mevcut 545 = 682 otomatik test gecti.
+
 v45  (08.09.2026)  Transferler gelir/gider sayilmiyor + odeme formlarinda bakiye
      HATA 1: Islemler (Gelir-Gider) ekranindaki Gelir/Gider kutulari transfer
      kayitlarini da sayiyordu. Raporlar ekrani saymadigi icin ayni sirkette iki
