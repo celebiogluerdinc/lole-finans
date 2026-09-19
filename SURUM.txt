@@ -1,6 +1,79 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v47  (19.09.2026)  ISLEM KONTROL MERKEZI + liste gorunumleri
+     ---- 1. YENI SEKME: ISLEM KONTROL MERKEZI ----
+     Ana ekranda (sirketlerin gorundugu yerde) yeni bir kart ve ayri bir sekme.
+     TUM sirketlerin ve MERKEZIN gun icinde yapilan islemleri TEK listede.
+       - Ana ekran karti: bugun kac islem, kac kayit kontrol bekliyor,
+         kac silme, kac duzeltme oldugunu bir bakista gosterir
+       - Sirket bazinda ozet tablosu: her defter icin islem sayisi, tutar
+         hacmi, silme, duzeltme ve kontrol bekleyen sayisi
+       - Donem dugmeleri: Bugun / Dun / Son 7 Gun / Bu Ay + tarih araligi
+       - Siralama secimi: KAYIT zamanina gore (ne zaman girildi) ya da
+         ISLEM tarihine gore (ne zaman oldu) — ikisi farkli olabilir
+       - Filtreler: sirket, defter, kaydeden kisi, arama
+       - Her satirda "↗ Ac" dugmesi: tiklayinca ISLEMIN YAPILDIGI SIRKETE
+         gecer ve ilgili ekrani (cari ekstresi, kart ekstresi, personel
+         gecmisi, POS girisleri, cek detayi...) dogrudan acar
+       - Yazdirilabilir kontrol raporu + CSV disa aktarim
+       - Ayri yetki: "kontrol.gor" (varsayilan: super yonetici + mudur)
+
+     ---- 2. YANLIS ISLEMLERI NASIL YAKALIYORUZ: 11 OTOMATIK KONTROL ----
+     Sistem her gun asagidakileri kendisi tarar ve isaretler:
+       YUKSEK  1. Ayni tutar ayni gun iki kez girilmis (mukerrer supheci)
+       YUKSEK  2. Tutari SONRADAN degistirilmis kayit — eski ve yeni deger
+                  yan yana yazar: "Tutar: 5.000 -> 50.000 (ahmet, 14:22)"
+       YUKSEK  3. Yuksek tutarli kayit silinmis (kim sildigi yazar)
+       YUKSEK  4. Kasa / banka eksi bakiyede
+       ORTA    5. Geriye donuk girilmis kayit (islem tarihi 7 gunden eski)
+       ORTA    6. Ileri tarihli islem (yil yanlis girilmis olabilir)
+       ORTA    7. Olagandisi buyuk tutar — ayni defterin ORTANCA isleminin
+                  4 katindan buyuk (ortalama kullanilmaz: tek hatali kayit
+                  ortalamayi kendi seviyesine cekip kendini gizler)
+       ORTA    8. Kredi karti limiti asilmis
+       BILGI   9. Gece 00:00-06:00 arasinda girilen kayit
+       BILGI  10. Aciklamasi bos kayit
+       BILGI  11. Bir saat icinde 15'ten fazla kayit giren kullanici
+     Her bulguyu inceleyip "✓ Incelendi" ile kapatabilirsiniz — kimin ne
+     zaman inceledigi kaydedilir, kayit DEGISMEZ, sadece listeden duser.
+
+     ---- 3. DEGISIKLIK GUNLUGU ----
+     Bir kayit duzenlendiginde artik NE degistigi saklaniyor (son 10 degisiklik):
+     hangi alan, eski deger, yeni deger, kim, ne zaman. Tum tanim formlarinda
+     calisir: cek, kart, personel, cari, hesap, sabit odeme, stok, demirbas,
+     POS, butce. Eskiden yalnizca "duzenlendi" bilgisi vardi.
+
+     ---- 4. LISTE GORUNUMU TUM PANELLERDE ----
+     8 panelde ayni yerde "Kart / Liste" secimi:
+     Banka & Kasa, Kredi Kartlari, Personel, Sabit Odemeler, POS,
+     Stok, Demirbas, Cek & Senet. Secim hatirlanir.
+     Liste gorunumlerinde ek bilgi sutunlari: hesaplarda 30 gunluk
+     giris/cikis, kartlarda kalan limit ve doluluk, personelde kidem ve
+     odeme durumu.
+
+     ---- 5. ISLEM GECMISI GELISTIRMELERI ----
+       - "Bugun" dugmesi; bugun girilen kayitlar renkli isaretli
+       - Siralama secimi: kayit zamani / islem tarihi
+       - SILINEN kayitlar artik listede (kim sildi, ne zaman)
+       - DUZELTILEN kayitlarda ne degistigi satirin altinda yaziyor
+       - Filtre: yalnizca silinenler / yalnizca duzeltilenler
+
+     DENETIM DUZELTMELERI (kod incelemesinde bulundu, 11 bulgu):
+       - Silinen kayitlar akisa IKI kez giriyordu; hayalet kopya silinmemis
+         sayildigi icin mukerrer uyarisi silmeye ragmen kaybolmuyordu
+       - Degisiklik gunlugu yalnizca gelir/giderde calisiyordu (10 defterin
+         9'unda tutar degisikligi yakalanmiyordu)
+       - "Bugun" filtresi UTC gunune bakiyordu: gece 00:00-03:00 girilen
+         kayitlar listeden dusuyordu
+       - "Incelendi" isareti eksi bakiye / limit asimi uyarilarini KALICI
+         susturuyordu (hesap daha da eksiye dusse bile)
+       - POS kart gorunumu yanlis alan adi kullaniyordu (komisyon hep %0)
+       - Cozulemeyen cop kaydi yetki kontrolunu atliyordu
+       - Kontrol karti sirket secme ekraninin her cizilisinde yeniden
+         hesaplaniyordu (onbellege alindi)
+     123 yeni test + mevcut 682 = 805 otomatik test gecti.
+
 v46  (19.09.2026)  Yetki sistemi, yazdirma, cari ekrani, islem gecmisi
      ---- 1. YETKI: uc kademeli rol + kalem kalem izin ----
      HATA (buyuk): Silme ve duzenleme HICBIR yetki kontrolunden gecmiyordu.
