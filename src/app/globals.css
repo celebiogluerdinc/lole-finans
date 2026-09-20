@@ -107,6 +107,13 @@ h1,h2,.kpi .v,.num,.amt{font-variant-numeric:tabular-nums}
 .kpi.a{background:linear-gradient(135deg,var(--acc),var(--acc2));border:0}
 .kpi.a::before{display:none}
 .kpi.a .l{color:rgba(255,255,255,.75)}.kpi.a .v{color:#fff}.kpi.a .s{color:rgba(255,255,255,.7)}
+/* v48: uyari bandi + isi haritasi */
+.kpi.w::before{background:var(--warn)}.kpi.w .v{color:var(--warn)}
+table.heat{width:100%;border-collapse:collapse;font-size:12.5px}
+table.heat th{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink3);padding:7px 8px;border-bottom:1.5px solid var(--line);white-space:nowrap}
+table.heat td{padding:7px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;white-space:nowrap}
+table.heat td[data-act]:hover{outline:2px solid var(--acc);outline-offset:-2px;border-radius:6px}
+table.heat tbody tr:hover td{background-image:linear-gradient(rgba(0,0,0,.02),rgba(0,0,0,.02))}
 .btn{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-weight:700;font-size:13px;padding:10px 16px;border-radius:12px;box-shadow:0 6px 16px -6px var(--acc);transition:transform .12s,filter .15s}
 .btn:hover{filter:brightness(1.08)}.btn:active{transform:scale(.97)}
 .btn.gh{background:var(--card);color:var(--acc);box-shadow:none;border:1.5px solid var(--line)}
