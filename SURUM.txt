@@ -1,6 +1,97 @@
 LOLE FINANS - SURUM GECMISI
 ===========================
 
+v49  (22.09.2026)  EKSTRE YUKLEME: PDF ve EXCEL/CSV DESTEGI
+
+     Artik "📷 Ekstre Yukle" dugmesi fotografin yaninda PDF ve Excel/CSV de kabul
+     ediyor. Uc dosya turu UC FARKLI yoldan okunur:
+
+     ---- 1. EXCEL / CSV  (en isabetli yol) ----
+     .xlsx .xls .xlsm .ods .csv .tsv
+     Veri ZATEN tablo halinde oldugu icin YAPAY ZEKAYA HIC GITMEZ:
+       - Bedava (AI kotasi harcamaz)
+       - Aninda biter (bekleme yok)
+       - BIREBIR dogru — OCR/okuma hatasi imkansiz
+       - Internet olmadan bile calisir
+     Baslik satiri otomatik bulunur, sutunlar otomatik eslenir:
+       Tarih / Aciklama / Tutar   ya da   Tarih / Aciklama / Borc / Alacak
+     Onizlemenin ustunde SUTUN ESLEME CUBUGU cikar; yanlissa oradan degistirirsiniz,
+     tablo aninda yenilenir. Baslik satiri yoksa sutunlar tahmin edilir ve
+     "tahmin edildi" diye acikca uyarilir (o satirlar otomatik isaretlenmez).
+
+     ---- 2. PDF ----
+     Bankadan indirilen PDF'in ICINDEKI METIN okunur — fotograftan cok daha temiz
+     ve ucuz sonuc verir. PDF taranmissa (icinde metin yoksa) sayfalar otomatik
+     gorsele cevrilip okunur. 30 sayfaya kadar; taranmis sayfalarda 6 sayfa siniri.
+
+     ---- 3. FOTOGRAF ----
+     Onceki gibi calisir (v48).
+
+     Hepsini ayni anda secebilirsiniz; her dosya kendi yolundan gider.
+     (Excel/CSV secilirse yalniz o okunur — sutun eslemesi tek dosyaya baglidir,
+      bu durum ekranda soylenir.)
+
+     KULLANILAN BILESENLER: public/vendor/ altina pdf.js ve SheetJS konuldu.
+     Sadece PDF/Excel secildiginde yuklenirler — normal kullanimda maliyeti SIFIR.
+
+     ---- DENETIM: 22 GERCEK HATA BULUNDU VE DUZELTILDI ----
+     Yayindan once bagimsiz bir denetim ajani kodu tarayip gercek Turk banka
+     bicimleriyle test etti. Bulunan KRITIK hatalar:
+
+      1. "Borc/Alacak" GOSTERGE SUTUNU tutar sutunu sanildi -> TUM SATIRLAR GELIR
+         yaziliyordu. Market alisverisi ve elektrik faturasi gelir olarak, uyarisiz
+         ve onceden isaretli kaydediliyordu. Artik bir sutun ancak GERCEKTEN rakam
+         tasiyorsa tutar/borc/alacak rolu alir; gosterge sutunu YON sutunu sayilir.
+      2. ISARETSIZ TUTAR sutununda her satir sessizce "giris" oluyordu. Bazi bankalar
+         tutari hep POZITIF yazip yonu ayri sutunda belirtir. Artik sutunda hic eksi
+         yoksa tespit edilir, her satir uyarilir ve otomatik isaretlenmez.
+      3. GERCEK FIRMA ADLARI silinip yok oluyordu: "TOPLAM GIDA SAN. TIC. LTD.",
+         "DEVIR OTOMOTIV", "BAKIYE TEKSTIL", "ARA TOPLAM LOJISTIK" gibi tedarikciler
+         "toplam/devir satiri" sanilip ATLANIYOR, kullaniciya HIC SOYLENMIYORDU.
+         Test dosyasinda 7 satirin 6'si (20.650 TL) sessizce kaybolmustu.
+         Artik yalnizca TAM eslesen ve TARIHSIZ satirlar elenir; kac satirin
+         atlandigi ekranda yazar ve "Atlanan satirlari goster" ile listelenir.
+      4. BASLIKSIZ dosyada "Dekont/Referans No" sutunu TUTAR sanilyordu:
+         25.000 TL kira "20.260.304.004 TL gelir" olarak kaydediliyordu.
+         Artik ondalik tasimayan uzun tam sayilar elenir.
+      5. KREDI KARTINDA virman satiri HARCAMA yaziliyordu -> kart borcu odemenin
+         2 KATI kadar SISIYORDU. Artik dogru sekilde ODEME yazilir.
+
+     YUKSEK oncelikli hatalar:
+      6. "Referans No" / "Islem Turu" sutunlari ACIKLAMA rolunu kapiyordu (Turk
+         ekstrelerinde bu sutunlar genelde Aciklama'dan ONCE gelir). Aciklama
+         kaybolunca kategori tahmini ve virman tespiti de olmustu. Artik puanli
+         rol atamasi var — gercek aciklama sutunu her zaman kazanir.
+      7. VALOR TARIHI ile ISLEM TARIHI karisiyordu: 25.000 TL kira Mart yerine
+         SUBAT'a yaziliyor, ay kapanisi ve KDV donemi bozuluyordu. Artik islem
+         tarihi onceliklidir, ekranda da belirtilir.
+      8. PDF metni 12.000 karakterlik parcalar halinde gonderiliyordu; cikan JSON
+         yanit sinirini asinca o bolumun TAMAMI (~200 hareket) SESSIZCE kayboluyordu.
+         Parca boyutu 3.500'e indirildi.
+      9. Karisik secimde (PDF + Excel) sutun eslemesini degistirmek PDF'ten gelen
+         satirlari siliyordu.
+     10. Kredi karti "Odeme Tutari" sutunu BORC sanilyor, odeme satiri tamamen
+         dusuyordu (5.000 TL kart odemesi kayboluyordu).
+     11. 50.000 satirlik dosyada satir siniri yoktu ve mukerrer kontrolu her satir
+         icin tum defteri tariyordu -> tarayici kilitleniyordu. Artik 2.000 satir
+         siniri ve tek gecisli mukerrer indeksi var.
+
+     ORTA / DUSUK:
+      • Tarih hucresinde saat varsa ("01.03.2026 14:32:05") TUM satirlar tarihsiz
+        kaliyordu — artik saat kismi ayiklanir, YYYY/AA/GG bicimi de okunur
+      • "Islem Aciklamasi" gibi ONEKLI basliklar eslesmiyordu
+      • PDF okumasi iptal edilince 30 sayfa cozulmeye devam ediyordu (~42 MB bosa)
+      • Iptal edilmis eski okuma, yeni okumanin kilidini aciyordu
+      • Kutuphane yuklemesi bir kez basarisiz olunca sayfa yenilenene kadar bir daha
+        denenemiyordu; zaman asimi da yoktu
+      • Hata mesajlarindaki HTML kacissiz basiliyordu
+      • doc.numPages, destroy() sonrasi okunuyordu
+      • SheetJS 0.18.5 -> 0.20.3 (CVE-2023-30533 prototype pollution, CVE-2024-22363
+        ReDoS acigi olan surumdu)
+
+     TEST: 24 takim, 1.382 dogrulama, tamami geciyor.
+     (Denetimde bulunan her hata icin ayri geri donus testi yazildi — test23, test24)
+
 v48  (20.09.2026)  RAPORLAMA MOTORU + DENETIM MECLISLERI + EKSTRE FOTOGRAFI
 
      ---- 1. EKSTRE FOTOGRAFINDAN OTOMATIK KAYIT (YENI) ----
