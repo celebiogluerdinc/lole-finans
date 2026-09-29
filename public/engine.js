@@ -615,6 +615,7 @@ function saveNow(){ // YALNIZCA buluta (ortak/çevrimiçi depo) kaydeder — cih
 }
 function save(){
  try{konKartTazele();}catch(e){} /* v47: kontrol kartı önbelleği */
+ try{katRozetTazele();}catch(e){}  /* v50: kategori uyarı rozeti önbelleği */
  if(READONLY){try{toast('🔒 Salt-okunur mod — bu değişiklik KAYDEDİLMEDİ');}catch(e){} return;} // v14-H11: eskiden sessizce yutuluyordu, kullanıcı "kaydedildi" toast'ını görüyordu
  dirty=true;
  clearTimeout(saveT);
@@ -713,7 +714,7 @@ function stampCreate(rec){ rec.createdBy=SESSION?SESSION.username:''; rec.create
    5.000 TL'lik bir kaydın 50.000'e çekilmesi hiçbir yerde görünmüyordu.
    Artık son 10 değişiklik kaydın içinde `chg` alanında saklanır ve
    İşlem Kontrol Merkezi bunu "Tutar: 5.000 → 50.000" diye gösterir. */
-var CHG_ALANLAR=['amount','tutar','cost','salary','opening','limit','date','paidDate','vade','period','cat','desc','type','accId','accId2','cariId','cardId','staffId','qty','riskLimit'];
+var CHG_ALANLAR=['amount','tutar','cost','salary','opening','limit','date','paidDate','vade','period','cat','desc','type','accId','accId2','cariId','cardId','staffId','qty','riskLimit','defCatGider','defCatGelir'];
 /* v47 DENETİM: tanım formları `Object.assign(init,o)` ile kaydın ÜZERİNE yazıyor,
    bu yüzden `stampUpdate(init,init)` çağrıldığında orig===rec oluyor ve değişiklik
    günlüğü hiç oluşmuyordu — çek tutarını 9.000'den 90.000'e çekmek hiçbir yerde
@@ -1310,7 +1311,7 @@ function go(p){
  if(p==='ortak'&&!canAccessCo('ortak')){toast('👥 Ortaklar & Sermaye ekranı için ayrı yetki gerekir — Ayarlar > Kullanıcılar bölümünden verilebilir');p='merkez';} /* v35 */
  PAGE=p;
  document.querySelectorAll('[data-p]').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
- const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,gecmis:rGecmis,kontrol:rKontrol,task:rTask,set:rSet,grup:rGrup,merkez:rMerkez,ortak:rOrtak};
+ const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,gecmis:rGecmis,kontrol:rKontrol,task:rTask,set:rSet,grup:rGrup,merkez:rMerkez,ortak:rOrtak,katduzelt:rKatDuzelt/* v50 */};
  (R[p]||rDash)();
  updateSaveBadge();
  try{window.scrollTo(0,0);}catch(e){}
@@ -1431,7 +1432,7 @@ function uiConfirm(msg,onYes,opt){
  opt=opt||{};
  document.getElementById('modalBox').innerHTML=
   `<div class="mh"><h3>${esc(opt.title||'Onay')}</h3><button data-act="closeModal" style="font-size:20px;color:var(--ink3)">✕</button></div>
-   <div class="mb"><p style="font-size:14px;line-height:1.55">${esc(msg)}</p></div>
+   <div class="mb"><p style="font-size:14px;line-height:1.55;white-space:pre-wrap">${esc(msg)}</p></div>
    <div class="mf"><button class="btn gh" data-act="closeModal">Vazgeç</button><button class="btn ${opt.danger?'solidDng':''}" id="cfYes">${esc(opt.yes||'Evet, Devam')}</button></div>`;
  window.__cfCb=onYes;
  document.getElementById('cfYes').onclick=cfRun;
@@ -1467,7 +1468,13 @@ function del(kind,id){
   toast('⛔ Silme yetkiniz yok — '+roleLabel(SESSION?SESSION.role:'user')+' rolünde bu kapalı. Gerekiyorsa yöneticinizden isteyin.');return;}
  var R={
   acc:['Hesap silinsin mi? (Çöp kutusuna taşınır)',()=>{var _n=S.txns.filter(t=>(t.accId===id||t.accId2===id)&&!t.deletedAt).length;if(_n){toast('⛔ Hareketi olan hesap silinemez — "⏸ Pasife Al" kullanın');return;}softDelete(S.accounts,id,'acc',r=>'Hesap: '+r.name);}],
-  tx:['İşlem silinsin mi? (Bağlı kayıtlar da birlikte silinir; taksitli kart harcamasında TÜM taksitler birlikte silinir; 30 gün içinde geri getirilebilir)',()=>{const rec=softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));if(rec){cascadeSoftDelete(S.fixedLogs,l=>l.txnId===id);if(rec.cariTxnId)cascadeSoftDelete(S.cariTxns,x=>x.id===rec.cariTxnId);if(rec.cardTxnId){cascadeSoftDelete(S.cardTxns,x=>x.id===rec.cardTxnId);cascadeSoftDelete(S.txns,t=>t.cardTxnId===rec.cardTxnId&&t.id!==id);}if(rec.staffTxnId)cascadeSoftDelete(S.staffTxns,x=>x.id===rec.staffTxnId);if(rec.cekId){var _ck=S.cheques.find(x=>x.id===rec.cekId);if(_ck&&!_ck.deletedAt)_ck.durum=_ck.prevDurum||'portfoy'; /* v14-K7: tahsildeyken kapatilan cek silinince tahsilde durumuna doner */cascadeSoftDelete(S.cariTxns,x=>x.cekId===rec.cekId);}if(rec.posEId){var _pe=S.posEntries.find(x=>x.id===rec.posEId);if(_pe&&!_pe.deletedAt){_pe.status='bekliyor';_pe.noAutoSettle=1;} /* v14-K8: autoSettlePos ayni kaydi hemen yeniden uretmesin */cascadeSoftDelete(S.txns,t=>t.posEId===rec.posEId&&t.id!==id);cascadeSoftDelete(S.cariTxns,x=>x.posEId===rec.posEId);}if(rec.stokTxnId){cascadeSoftDelete(S.stockTxns,x=>x.id===rec.stokTxnId);cascadeSoftDelete(S.cardTxns,x=>x.stokTxnId===rec.stokTxnId);cascadeSoftDelete(S.cariTxns,x=>x.stokTxnId===rec.stokTxnId);}if(rec.assetId){cascadeSoftDelete(S.cardTxns,x=>x.assetId===rec.assetId);cascadeSoftDelete(S.cariTxns,x=>x.assetId===rec.assetId);}}}],
+  tx:['İşlem silinsin mi? (Bağlı kayıtlar da birlikte silinir; taksitli kart harcamasında TÜM taksitler birlikte silinir; 30 gün içinde geri getirilebilir)',()=>{const rec=softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));if(rec){cascadeSoftDelete(S.fixedLogs,l=>l.txnId===id);
+   /* v50: "Kategori Duzeltme Merkezi"nin gecmise doldurdugu telafi gider kaydi (katDuzeltme)
+      merkez isleminin BIR PARCASI DEGIL, sonradan eklenmis bir tamamlayicidir. Yukari dogru
+      kaskad ederse tek bir satiri silmek merkezin odemesini iki defterden birden ucurur.
+      Bu yuzden yalnizca kendisi silinir; kayit yeniden "eksik" listesine duser. */
+   if(rec.katDuzeltme){/* yukari kaskad YOK */}
+   else{if(rec.cariTxnId)cascadeSoftDelete(S.cariTxns,x=>x.id===rec.cariTxnId);if(rec.cardTxnId){cascadeSoftDelete(S.cardTxns,x=>x.id===rec.cardTxnId);cascadeSoftDelete(S.txns,t=>t.cardTxnId===rec.cardTxnId&&t.id!==id);}if(rec.staffTxnId)cascadeSoftDelete(S.staffTxns,x=>x.id===rec.staffTxnId);if(rec.cekId){var _ck=S.cheques.find(x=>x.id===rec.cekId);if(_ck&&!_ck.deletedAt)_ck.durum=_ck.prevDurum||'portfoy'; /* v14-K7: tahsildeyken kapatilan cek silinince tahsilde durumuna doner */cascadeSoftDelete(S.cariTxns,x=>x.cekId===rec.cekId);}if(rec.posEId){var _pe=S.posEntries.find(x=>x.id===rec.posEId);if(_pe&&!_pe.deletedAt){_pe.status='bekliyor';_pe.noAutoSettle=1;} /* v14-K8: autoSettlePos ayni kaydi hemen yeniden uretmesin */cascadeSoftDelete(S.txns,t=>t.posEId===rec.posEId&&t.id!==id);cascadeSoftDelete(S.cariTxns,x=>x.posEId===rec.posEId);}if(rec.stokTxnId){cascadeSoftDelete(S.stockTxns,x=>x.id===rec.stokTxnId);cascadeSoftDelete(S.cardTxns,x=>x.stokTxnId===rec.stokTxnId);cascadeSoftDelete(S.cariTxns,x=>x.stokTxnId===rec.stokTxnId);}if(rec.assetId){cascadeSoftDelete(S.cardTxns,x=>x.assetId===rec.assetId);cascadeSoftDelete(S.cariTxns,x=>x.assetId===rec.assetId);}}}}],
   pos:['POS tanımı, girişleri ve bağlı gelir/komisyon/cari kayıtları silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.pos,id,'pos',r=>'POS: '+r.name);var _peids=S.posEntries.filter(t=>t.posId===id).map(t=>t.id);cascadeSoftDelete(S.posEntries,t=>t.posId===id);cascadeSoftDelete(S.txns,t=>t.posEId&&_peids.indexOf(t.posEId)>-1);cascadeSoftDelete(S.cariTxns,t=>t.posEId&&_peids.indexOf(t.posEId)>-1);}], // v14-K5: eskiden yalnız tanım siliniyor, girişler yetim kalıp KPI'ları şişiriyordu
   posE:['POS girişi silinsin mi? (Hesaba geçmişse bağlı gelir/komisyon/cari kayıtları da birlikte silinir)',()=>{softDelete(S.posEntries,id,'posE',r=>'POS girişi: '+fmt0(r.net)+' ('+r.date+')');cascadeSoftDelete(S.txns,t=>t.posEId===id);cascadeSoftDelete(S.cariTxns,t=>t.posEId===id);}],
   card:['Kart, hareketleri ve bağlı gider/cari/sabit-ödeme kayıtları silinsin mi? (Çöp kutusuna taşınır)',()=>{softDelete(S.cards,id,'card',r=>'Kart: '+r.name);var _ctids=S.cardTxns.filter(t=>t.cardId===id).map(t=>t.id);var _ccids=S.cardTxns.filter(t=>t.cardId===id&&t.cariTxnId).map(t=>t.cariTxnId);var _cstids=S.cardTxns.filter(t=>t.cardId===id&&t.staffTxnId).map(t=>t.staffTxnId);var _ctxids=S.txns.filter(t=>t.cardTxnId&&_ctids.indexOf(t.cardTxnId)>-1).map(t=>t.id);cascadeSoftDelete(S.cardTxns,t=>t.cardId===id);cascadeSoftDelete(S.txns,t=>t.cardTxnId&&_ctids.indexOf(t.cardTxnId)>-1);cascadeSoftDelete(S.cariTxns,t=>_ccids.indexOf(t.id)>-1);cascadeSoftDelete(S.staffTxns,t=>_cstids.indexOf(t.id)>-1);cascadeSoftDelete(S.fixedLogs,l=>l.txnId&&_ctxids.indexOf(l.txnId)>-1);}], // v14-K3: eskiden gider ve tedarikçi carisi yetim kalıyordu
@@ -1504,6 +1511,15 @@ function icSweep(){
  var n=0;
  Object.keys(grp).forEach(function(k){var g=grp[k];
   if(g.a.length&&g.d>0){g.a.forEach(function(r){r.deletedAt=now;r.deletedBy=by;n++;});}});
+ /* v50: "Kategori Düzeltme Merkezi"nin geçmişe yazdığı telafi gider kaydı grup içi
+    isaretini TASIMAZ (tek satiri silmek merkez odemesini ucurmasin diye). Bu yuzden
+    kaynak cari hareketi silindiginde yetim kalir ve kar/zararda karsiliksiz gider
+    birakirdi. Ters yondeki koruma burada. */
+ S.txns.forEach(function(r){
+  if(!r.katDuzeltme||r.deletedAt||!r.cariTxnId)return;
+  var ct=S.cariTxns.find(function(x){return x.id===r.cariTxnId;});
+  if(!ct||ct.deletedAt){r.deletedAt=now;r.deletedBy=by;n++;}
+ });
  return n;
 }
 function icRestoreSweep(){ /* geri alma yönü — simetri */
@@ -1540,12 +1556,13 @@ function restoreTrash(idxStr){
  if(entry.kind==='cardT'){S.txns.forEach(function(t){if(t.cardTxnId===entry.id)__und(t);});if(rec.cariTxnId)__und(S.cariTxns.find(function(x){return x.id===rec.cariTxnId;}));}
  if(entry.kind==='staffT'){S.txns.forEach(function(t){if(t.staffTxnId===entry.id)__und(t);});S.cardTxns.forEach(function(t){if(t.staffTxnId===entry.id)__und(t);});}
  if(entry.kind==='cek'){S.txns.forEach(function(t){if(t.cekId===entry.id)__und(t);});S.cariTxns.forEach(function(t){if(t.cekId===entry.id)__und(t);});}
- if(entry.kind==='tx'){S.fixedLogs.forEach(function(l){if(l.txnId===entry.id)__und(l);});if(rec.cariTxnId)__und(S.cariTxns.find(function(x){return x.id===rec.cariTxnId;}));if(rec.cardTxnId){__und(S.cardTxns.find(function(x){return x.id===rec.cardTxnId;}));S.txns.forEach(function(t){if(t.cardTxnId===rec.cardTxnId)__und(t);});}if(rec.staffTxnId)__und(S.staffTxns.find(function(x){return x.id===rec.staffTxnId;}));if(rec.cekId){var _ck2=S.cheques.find(function(x){return x.id===rec.cekId;});if(_ck2)_ck2.durum='kapandi';S.cariTxns.forEach(function(x){if(x.cekId===rec.cekId)__und(x);});}if(rec.posEId){var _pe2=S.posEntries.find(function(x){return x.id===rec.posEId;});if(_pe2){_pe2.status='gecti';delete _pe2.noAutoSettle;}S.txns.forEach(function(t){if(t.posEId===rec.posEId)__und(t);});S.cariTxns.forEach(function(t){if(t.posEId===rec.posEId)__und(t);});}if(rec.stokTxnId){__und(S.stockTxns.find(function(x){return x.id===rec.stokTxnId;}));S.cardTxns.forEach(function(t){if(t.stokTxnId===rec.stokTxnId)__und(t);});S.cariTxns.forEach(function(t){if(t.stokTxnId===rec.stokTxnId)__und(t);});}if(rec.assetId){S.cardTxns.forEach(function(t){if(t.assetId===rec.assetId)__und(t);});S.cariTxns.forEach(function(t){if(t.assetId===rec.assetId)__und(t);});}}
+ if(entry.kind==='tx'&&rec.katDuzeltme){/* v50: telafi kaydı yalnız kendisi geri gelir */}
+ else if(entry.kind==='tx'){S.fixedLogs.forEach(function(l){if(l.txnId===entry.id)__und(l);});if(rec.cariTxnId)__und(S.cariTxns.find(function(x){return x.id===rec.cariTxnId;}));if(rec.cardTxnId){__und(S.cardTxns.find(function(x){return x.id===rec.cardTxnId;}));S.txns.forEach(function(t){if(t.cardTxnId===rec.cardTxnId)__und(t);});}if(rec.staffTxnId)__und(S.staffTxns.find(function(x){return x.id===rec.staffTxnId;}));if(rec.cekId){var _ck2=S.cheques.find(function(x){return x.id===rec.cekId;});if(_ck2)_ck2.durum='kapandi';S.cariTxns.forEach(function(x){if(x.cekId===rec.cekId)__und(x);});}if(rec.posEId){var _pe2=S.posEntries.find(function(x){return x.id===rec.posEId;});if(_pe2){_pe2.status='gecti';delete _pe2.noAutoSettle;}S.txns.forEach(function(t){if(t.posEId===rec.posEId)__und(t);});S.cariTxns.forEach(function(t){if(t.posEId===rec.posEId)__und(t);});}if(rec.stokTxnId){__und(S.stockTxns.find(function(x){return x.id===rec.stokTxnId;}));S.cardTxns.forEach(function(t){if(t.stokTxnId===rec.stokTxnId)__und(t);});S.cariTxns.forEach(function(t){if(t.stokTxnId===rec.stokTxnId)__und(t);});}if(rec.assetId){S.cardTxns.forEach(function(t){if(t.assetId===rec.assetId)__und(t);});S.cariTxns.forEach(function(t){if(t.assetId===rec.assetId)__und(t);});}}
  if(entry.kind==='posE'){S.txns.forEach(function(t){if(t.posEId===entry.id)__und(t);});S.cariTxns.forEach(function(t){if(t.posEId===entry.id)__und(t);});}
  if(entry.kind==='pos'){var _rp=[];S.posEntries.forEach(function(t){if(t.posId===entry.id&&t.deletedAt){__und(t);_rp.push(t.id);}});[S.txns,S.cariTxns].forEach(function(a2){a2.forEach(function(t){if(t.posEId&&_rp.indexOf(t.posEId)>-1)__und(t);});});} /* v14-K5 simetri */
  if(entry.kind==='fixed'){var _rf=[];S.fixedLogs.forEach(function(l){if(l.fixedId===entry.id&&l.deletedAt){__und(l);if(l.txnId)_rf.push(l.txnId);}});S.txns.forEach(function(t){if(_rf.indexOf(t.id)>-1)__und(t);});} /* v14-K6 simetri */
  if(rec.icId&&typeof icRestore==='function')icRestore(rec.icId); /* v33: grup içi işlemin tamamı birlikte geri döner */
- try{icRestoreSweep();}catch(e){} /* v41: üst kayıt geri gelirse grup içi bacakları da geri gelsin */
+ if(!rec.katDuzeltme){try{icRestoreSweep();}catch(e){}} /* v41 · v50: telafi kaydı grubu diriltmez */
  if(entry.kind==='partner'&&typeof ortakCariCascade==='function')ortakCariCascade(entry.id,true);
  S.trash=(S.trash||[]).filter((e,i)=>i!==idx);
  logAudit('Kayıt geri getirildi',entry.label||entry.kind);
@@ -1570,6 +1587,13 @@ function purgeOldTrash(){ // 30 günden eski silinmiş kayıtları kalıcı olar
 const accOpts=(co,empty)=>{const l=byCo(S.accounts,co).filter(a=>a.active!=='0').map(a=>[a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' — bakiye '+fmt0(accBalance(a))]);return empty?[['','— Seçin —']].concat(l):l;}; /* v45: hangi hesabın ne kadarı var, seçerken görünsün */
 const cariOpts=co=>[['','— Cari yok —']].concat(byCo(S.cari,co).filter(c=>c.active!=='0'&&!c.sys).map(c=>[c.id,c.name])); /* v36: merkez/ortak sistem hesapları elle seçilemez */
 const catOpts=t=>S.cats[t].map(c=>[c,c]);
+/* v50 DENETIM: 'Grup Ici' / 'Ortak / Sermaye' SISTEM kategorileridir. integrityChecks
+   (xferBad) bu kategorideki her kaydi "transfer kar/zarara girmis" sayip onarXfer ile
+   xfer:true isaretler -> gercek gider kar/zarardan silinir. v50'de kategori seciciler
+   cogaldigi icin kullanici bunlari yanlislikla secebilir hale geldi. Kullaniciya
+   gosterilen her listede bu kalemler ELENIR. */
+var KAT_SISTEM={'Grup \u0130\u00e7i':1,'Ortak / Sermaye':1};
+const catOptsUser=t=>(S.cats[t]||[]).filter(function(c){return !KAT_SISTEM[c];}).map(c=>[c,c]);
 
 function quickAdd(){
  if(CO==='grup')return;
@@ -1880,7 +1904,7 @@ function addTxnForm(type,init){
  const isEdit=!!(init&&init.id); // v26: sadece gerçek bir kayıt ID'si varsa "düzenleme" say — yoksa (ör. sadece hesap ön-doldurmak için) her zaman YENİ kayıt oluştur
  openForm(type==='gelir'?'Gelir Ekle':'Gider Ekle',[
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
-  {name:'cat',label:'Kategori',type:'select',opts:catOpts(type),req:1},
+  {name:'cat',label:'Kategori',type:'select',opts:catOptsUser(type),req:1},
   {name:'accId',label:type==='gelir'?'Hangi hesaba girdi':'Hangi hesaptan çıktı (ya da 🏛 merkez öder)',type:'select',opts:(type==='gider'&&typeof merkezOpts==='function')?accOpts(CO).concat(merkezOpts(CO)):accOpts(CO),req:1},
   {name:'cariId',label:'Cari (opsiyonel — seçerseniz bu para hareketi cari bakiyesine tahsilat/ödeme olarak işlenir)',type:'select',opts:cariOpts(CO)},
   {row:[{name:'vat',label:'KDV %',type:'select',opts:[['','KDV yok'],['1','%1'],['10','%10'],['20','%20']]},{name:'doc',label:'Belge no'}]},
@@ -2147,7 +2171,7 @@ function cardTxnForm(cardId,type){
  if(yetkiYok('kayit.ekle','Yeni kayıt girmek'))return; /* v46 denetim */
  const flds= type==='harcama'
   ? [{row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
-     {row:[{name:'cat',label:'Kategori',type:'select',opts:catOpts('gider'),req:1},{name:'taksit',label:'Taksit',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']]}]},
+     {row:[{name:'cat',label:'Kategori',type:'select',opts:catOptsUser('gider'),req:1},{name:'taksit',label:'Taksit',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']]}]},
      {row:[{name:'vat',label:'KDV %',type:'select',opts:[['','KDV yok'],['1','%1'],['10','%10'],['20','%20']]},{name:'cariId',label:'İlgili cari / tedarikçi (opsiyonel)',type:'select',opts:cariOpts(CO)}]},{name:'desc',label:'Açıklama',ph:'Ör: Metro toptan alışveriş'}]
   : [{row:[{name:'amount',label:'Ödeme tutarı (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
      {name:'accId',label:'Hangi hesaptan ödendi',type:'select',opts:accOpts(CO),req:1}];
@@ -2420,7 +2444,7 @@ function rCari(){
   `<button class="btn gh" data-act="cariListeCsv" title="Ekrandaki listeyi Excel/CSV olarak indir">⬇ CSV</button>`+
   `<button class="btn gh" data-act="cariListeYazdir" title="Ekrandaki listeyi ekstre gibi yazdırır — sayfa görüntüsünü değil">🖨 Listeyi Yazdır</button>`+
   `<button class="btn" data-act="cariForm">＋ Cari Ekle</button>`)+
- orphanCard()+
+ orphanCard()+katUyariRozeti()+ /* v50 */
  seg([['all','Tümü',F.aktif.length],['musteri','Müşteriler',F.aktif.filter(r=>F.isM(r.c)).length],['tedarikci','Tedarikçiler',F.aktif.filter(r=>F.isT(r.c)).length],['diger','Diğer',F.aktif.filter(r=>r.c.type==='diger').length]],cariTab,'setCariTab')+
  /* v46: KPI kutuları artık TIKLANABİLİR — "toplam borç bu kadar" deyip tıklayınca
     o listeyi açmak, kullanıcının açıkça istediği davranıştı. */
@@ -2522,8 +2546,34 @@ function cariForm(id){
   {row:[{name:'taxNo',label:'Vergi No / TCKN'},{name:'phone',label:'Telefon'}]},
   {row:[{name:'email',label:'E-posta',type:'email'},{name:'vadeGun',label:'Varsayılan vade (gün)',type:'number',step:'1',def:30}]},
   {row:[{name:'opening',label:'Açılış bakiyesi ₺ (+ alacağımız / − borcumuz)',type:'number',def:0},{name:'riskLimit',label:'Risk limiti (₺)',type:'number'}]},
+  /* v50: VARSAYILAN KATEGORİ — bu cariyle yapılan her ödeme/tahsilatta hazır gelir.
+     Kategori seçmek unutulunca raporlar "Diğer Gider" yığınına dönüyordu. */
+  {row:[{name:'defCatGider',label:'💸 Ödeme yaparken varsayılan GİDER kategorisi',type:'select',opts:[['','— Her işlemde ben seçeyim —']].concat(catOptsUser('gider'))},
+        {name:'defCatGelir',label:'💰 Tahsilat yaparken varsayılan GELİR kategorisi',type:'select',opts:[['','— Her işlemde ben seçeyim —']].concat(catOptsUser('gelir'))}]},
   {name:'note',label:'Not',type:'textarea'}
  ],o=>{ if(id)applyEdit(init,o); else pushRec(S.cari,{id:nid(),co:CO,...o}); save();toast('Cari kaydedildi');go('cari'); },init||{}); // v14-D1: denetim damgası
+}
+/* v50: cari kartindaki varsayilan kategori */
+function cariDefCat(c,yon){
+ if(!c)return '';
+ var v=(yon==='gelir')?c.defCatGelir:c.defCatGider;
+ return v||'';
+}
+/* Secenek listesi: varsayilan varsa en uste "onerilen" olarak konur */
+function cariKatOpts(c,yon){
+ var d=cariDefCat(c,yon);
+ var L=catOptsUser(yon==='gelir'?'gelir':'gider').map(function(x){return Array.isArray(x)?x.slice():[x,x];});
+ if(d){
+  L=L.filter(function(x){return x[0]!==d;});
+  L.unshift([d,d+'  ★ bu carinin varsayılanı']);
+ }else{
+  /* v50 DENETİM: varsayılan yoksa listenin başında BOŞ seçenek olmalıydı; yoksa tarayıcı
+     ilk kategoriyi (örneğin "Hammadde & Malzeme") sessizce seçili gösteriyor ve kullanıcı
+     hiç dokunmadan yanlış kaleme yazılıyordu. Üstelik o kayıt "Diğer Gider" olmadığı için
+     Kategori Düzeltme Merkezi'nin radarına da girmiyordu. */
+  L.unshift(['','— Kategori seçin —']);
+ }
+ return L;
 }
 function cariTxnForm(cariId,defType,init){
  if(yetkiYok('kayit.ekle','Yeni kayıt girmek'))return; /* v46 denetim */
@@ -2539,44 +2589,89 @@ function cariTxnForm(cariId,defType,init){
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'nakit',label:'Nakit Hareketi (para gerçekten hesaba girdi/çıktıysa)',type:'select',opts:[['','Yok — sadece cari kaydı (veresiye)'],['gelir','💰 Bu hesaba PARA GİRİŞİ oldu (tahsilat)'],['gider','💸 Bu hesaptan PARA ÇIKIŞI oldu (ödeme)']],def:''},
   {name:'method',label:'Yöntem: kasa / banka / 💳 kredi kartı / 🏛 merkez',type:'select',opts:payMethodOpts(CO,1)},
+  /* v50: KATEGORİ — nakit hareketi varsa kâr/zarar kaydı oluşur, o kayıt bir kaleme
+     yazılmalı. Önceden "Diğer Gider" olarak sabitti ve gider raporu detaysız kalıyordu. */
+  {name:'cat',label:'Kategori (kâr/zarar raporunda bu kaleme işlenir)',type:'select',
+   opts:cariKatOpts(c,defType==='alacak'?'gelir':'gider'),def:cariDefCat(c,defType==='alacak'?'gelir':'gider')},
   {name:'vade',label:'Vade tarihi (hatırlatma için)',type:'date',def:c.vadeGun?addDays(todayISO(),+c.vadeGun):''},
   {name:'desc',label:'Açıklama',ph:'Fatura no, işlem detayı...'}
  ],o=>{
   var method=o.method||''; var isCard=method.indexOf('card:')===0; var cardId=isCard?method.slice(5):''; var bankAccId=isCard?'':method;
+  if(isMerkezMethod(method)){isCard=false;cardId='';bankAccId='';}
   if(o.nakit&&!method){ toast('⚠ "Nakit Hareketi" seçtiniz ama yöntem seçmediniz — parayı hangi kasa/banka veya kredi kartıyla işlediğinizi seçin; gerçek para hareketi yoksa "Yok — sadece cari kaydı (veresiye)" seçeneğini işaretleyin.'); cariTxnForm(cariId,o.type,o); return; }
   if(isCard&&o.nakit!=='gider'){ toast('💳 Kredi kartı yalnızca ödeme (para çıkışı) için seçilebilir; tahsilat için kasa/banka seçin.'); cariTxnForm(cariId,o.type,o); return; }
+  /* v50 DENETİM-2: önce "🏛 merkez öder" seçip sonra "Yok (veresiye)"ye dönülmesi
+     sessizce düz bir veresiye kaydına dönüşüyordu — kullanıcı ödemeyi yapılmış sanıyordu. */
+  if(!o.nakit&&isMerkezMethod(method)){ toast('🏛 Merkez ödemesi için "Nakit Hareketi" alanında "💸 PARA ÇIKIŞI oldu" seçeneğini işaretleyin — ya da yöntemi kasa/bankaya çevirin.'); cariTxnForm(cariId,o.type,o); return; }
+  if(!o.nakit){o.method='';method='';isCard=false;cardId='';bankAccId='';}  /* v50: gizlenen yöntem alanının değeri veresiye kaydına sızmasın */
+  /* v50 DENETİM: nakit hareketi varsa kâr/zarar defterine kayıt düşer — kalemi belli olmalı.
+     Cari kartında varsayılan tanımlıysa otomatik dolar, kullanıcıya hiç sorulmaz.
+     Yön/yöntem hataları ÖNCE bildirilsin diye bu kapı en sona konur. */
+  var _katGerek=function(){
+   if(!o.nakit)return false;
+   if(o.cat)return false;
+   var _dc=cariDefCat(c,o.nakit==='gelir'?'gelir':'gider');
+   if(_dc){o.cat=_dc;return false;}
+   toast('Kategori seçin — bu hareket kâr/zarar raporunda bu kaleme yazılacak. (Cari kartına varsayılan kategori girerseniz bir daha sorulmaz.)');
+   cariTxnForm(cariId,o.type,o);
+   return true;
+  };
   if(isMerkezMethod(method)){ /* v40: ödemeyi şirket merkezi yaptı */
    if(o.nakit!=='gider'){ toast('🏛 MERKEZ ÖDER seçeneği yalnızca ÖDEME için kullanılır — "Nakit Hareketi" alanında "💸 PARA ÇIKIŞI oldu" seçeneğini işaretleyin'); cariTxnForm(cariId,o.type,o); return; }
    if(o.type!=='borc'){ toast('🏛 Merkez ödemesi cariye olan BORCUMUZU kapatır — "İşlem" alanında "Borçlandır" seçeneğini işaretleyin'); cariTxnForm(cariId,o.type,o); return; }
    if(!(+o.amount>0)){ toast('Tutar girin'); cariTxnForm(cariId,o.type,o); return; }
-   if(merkezIcerdenOde(CO,{hedef:'cari',cariId:cariId,amount:+o.amount,date:o.date,desc:o.desc||'',method:merkezMethodOf(method)},(c.name||'Cari')+' ödemesi kaydedildi'))go('cari');
+   if(_katGerek())return;
+   /* v50: kategori merkez ödemesine de taşınır — şirketin gider raporunda görünsün */
+   if(merkezIcerdenOde(CO,{hedef:'cari',cariId:cariId,amount:+o.amount,date:o.date,desc:o.desc||'',
+      cat:o.cat||cariDefCat(c,'gider'),method:merkezMethodOf(method)},(c.name||'Cari')+' ödemesi kaydedildi'))go('cari');
    return;
   }
+  if(_katGerek())return;
   var ctid=nid();
   S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:cariId,type:o.type,amount:+o.amount,date:o.date,vade:o.vade,desc:o.desc,nakit:o.nakit||'',accId:bankAccId||'',cardId:cardId||''}));
   let nakitMsg='';
+  /* v50: kategori kullanıcıdan gelir; boşsa cari kartındaki varsayılan, o da yoksa genel */
+  var _kat=o.cat||cariDefCat(c,o.nakit==='gelir'?'gelir':'gider')||(o.nakit==='gelir'?'Diğer Gelir':'Diğer Gider');
+  if(o.nakit)ensureCat(o.nakit==='gelir'?'gelir':'gider',_kat);
   if(o.nakit&&bankAccId){
    S.txns.push(stampCreate({id:nid(),co:CO,type:o.nakit,date:o.date,amount:+o.amount,accId:bankAccId,cariId:cariId,cariTxnId:ctid,
-    cat:o.nakit==='gelir'?'Diğer Gelir':'Diğer Gider',
+    cat:_kat,
     desc:(o.nakit==='gelir'?'Cari tahsilat: ':'Cari ödeme: ')+(c.name||'')+(o.desc?' - '+o.desc:'')}));
-   nakitMsg=' + nakit hareketi işlendi';
+   nakitMsg=' + nakit hareketi işlendi ('+_kat+')';
   }else if(o.nakit&&isCard){
    var cdid=nid();
-   S.cardTxns.push(stampCreate({id:cdid,co:CO,cardId:cardId,type:'harcama',amount:+o.amount,date:o.date,cat:'Cari Ödeme',taksit:1,cariId:cariId,cariTxnId:ctid,desc:'Cari ödemesi: '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,accId:'',src:'card',cariId:cariId,cariTxnId:ctid,cardTxnId:cdid,cat:'Cari Ödeme',
+   S.cardTxns.push(stampCreate({id:cdid,co:CO,cardId:cardId,type:'harcama',amount:+o.amount,date:o.date,cat:_kat,taksit:1,cariId:cariId,cariTxnId:ctid,desc:'Cari ödemesi: '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,accId:'',src:'card',cariId:cariId,cariTxnId:ctid,cardTxnId:cdid,cat:_kat,
     desc:'Cari ödemesi (kredi kartı): '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
-   nakitMsg=' + kredi kartına işlendi (kart borcu arttı)';
+   nakitMsg=' + kredi kartına işlendi (kart borcu arttı, '+_kat+')';
   }
   const bal=cariBalance(S.cari.find(x=>x.id===cariId));
   if(c.riskLimit&&bal>+c.riskLimit)toast('⚠ Risk limiti aşıldı! Bakiye: '+fmt(bal));
   else toast('Hareket kaydedildi'+nakitMsg);
   save();go('cari');
  },init||{});
- setTimeout(function(){ /* veresiye girisinde yontem alanini gizle */
+ setTimeout(function(){ /* veresiye girisinde yontem ve kategori alanlarini gizle */
   var nk=document.querySelector('#mForm select[name="nakit"]'),mt=document.querySelector('#mForm select[name="method"]');
-  if(!nk||!mt)return;
-  var fld=mt.closest('.fld');if(!fld)return;
-  var upd=function(){fld.style.display=nk.value?'':'none';};
+  var kt=document.querySelector('#mForm select[name="cat"]');
+  if(!nk)return;
+  var mFld=mt?mt.closest('.fld'):null, kFld=kt?kt.closest('.fld'):null;
+  /* v50: yon degisince kategori listesi gelir<->gider arasinda degisir.
+     Yanlis listeden secim yapilirsa rapor kalemi bos kalirdi. */
+  var upd=function(){
+   var acik=!!nk.value;
+   if(mFld)mFld.style.display=acik?'':'none';
+   if(kFld)kFld.style.display=acik?'':'none';
+   if(kt&&acik){
+    var yon=nk.value==='gelir'?'gelir':'gider';
+    if(kt.getAttribute('data-yon')!==yon){
+     var L=cariKatOpts(c,yon), onceki=kt.value;
+     kt.innerHTML=L.map(function(x){return '<option value="'+esc(x[0])+'">'+esc(x[1])+'</option>';}).join('');
+     kt.setAttribute('data-yon',yon);
+     var d=cariDefCat(c,yon);
+     kt.value=(L.some(function(x){return x[0]===onceki;})?onceki:(d||L[0][0]));
+    }
+   }
+  };
   nk.addEventListener('change',upd);upd();
  },80);
  odemeBakiyeBind(CO,{dirField:'nakit',hedef:'Seçilen hesabın durumu'}); /* v45 */
@@ -2592,7 +2687,7 @@ function cariInvoiceForm(cariId){
   {name:'type',label:'Fatura Yönü',type:'select',opts:[['borc','Kestiğimiz fatura (satış — alacağımız artar)'],['alacak','Aldığımız fatura (alış — borcumuz artar)']],req:1,def:'borc'},
   {row:[{name:'faturaNo',label:'Fatura No',req:1,ph:'Ör: A2026-000145'},{name:'date',label:'Fatura Tarihi',type:'date',def:todayISO(),req:1}]},
   {row:[{name:'amount',label:'Tutar ₺ (KDV dahil)',type:'number',req:1,min:0.01},{name:'vat',label:'KDV %',type:'select',opts:[['','KDV yok'],['1','%1'],['10','%10'],['20','%20']]}]},
-  {name:'cat',label:'Gider kategorisi (alış faturası için — bütçe ve tahakkuk raporu bu kaleme işler)',type:'select',opts:[['','— Genel (Fatura Gideri) —']].concat(catOpts('gider'))},
+  {name:'cat',label:'Gider kategorisi (alış faturası için — bütçe ve tahakkuk raporu bu kaleme işler)',type:'select',opts:[['','— Genel (Fatura Gideri) —']].concat(catOptsUser('gider'))},
   {name:'vade',label:'Vade tarihi',type:'date',def:c.vadeGun?addDays(todayISO(),+c.vadeGun):''},
   {name:'desc',label:'Açıklama (opsiyonel)',ph:'Fatura içeriği / not'}
  ],o=>{
@@ -2801,6 +2896,8 @@ function staffPayForm(staffId,init){
   {name:'period',label:'Dönem — maaşın HANGİ AYA ait olduğu (ödeme tarihi ayrı)',type:'month',def:staffPeriod(),req:1},
   {name:'method',label:'Hangi hesaptan / kart / 🏛 merkez (maaş/avans/prim için zorunlu)',type:'select',opts:payMethodOpts(CO,1)},
   {name:'kesintiAccId',label:'Kesinti NAKİT tahsil edildiyse hangi hesaba girdi (opsiyonel — boşsa maaştan mahsup edilir)',type:'select',opts:accOpts(CO,1)},
+  /* v50: kesinti tahsilatı gelir yazılıyordu ama kategorisi 'Diğer Gelir' olarak sabitti */
+  {name:'kesintiCat',label:'Kesinti tahsilatının gelir kategorisi (yalnızca yukarıda hesap seçtiyseniz)',type:'select',opts:catOptsUser('gelir'),def:'Diğer Gelir'},
   {name:'desc',label:'Açıklama'}
  ],o=>{
   var isPay=(o.type==='maas'||o.type==='avans'||o.type==='prim');
@@ -2825,7 +2922,9 @@ function staffPayForm(staffId,init){
    }
   }
   if(o.type==='kesinti'&&o.kesintiAccId){ // D1: kesinti nakden tahsil edildiyse hesaba gelir yazılır
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gelir',date:o.date,amount:+o.amount,cat:'Diğer Gelir',accId:o.kesintiAccId,staffTxnId:stid,desc:'Personel kesintisi tahsilatı: '+(st.name||'')}));
+   /* v50: sabit 'Diğer Gelir' yerine seçilebilir kategori */
+   var _kkat=o.kesintiCat||'Diğer Gelir'; ensureCat('gelir',_kkat);
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gelir',date:o.date,amount:+o.amount,cat:_kkat,accId:o.kesintiAccId,staffTxnId:stid,desc:'Personel kesintisi tahsilatı: '+(st.name||'')}));
   }
   save();toast('Kayıt eklendi'+(isCard?' — kredi kartına işlendi':''));go('staff');
  },init||{});
@@ -3198,6 +3297,7 @@ function rRep(){
 
  document.getElementById('main').innerHTML= topbar('Raporlar',
   `<button class="btn gh" data-act="excelDl" data-arg="co">📊 Excel</button><button class="btn gh" data-act="pdfPrint">🖨 PDF</button><button class="btn" data-act="aiSummary" data-arg="co">✦ AI ile Özetle</button><button class="btn ai" data-act="meclisToplanti" data-arg="finans">🏛 Yönetim Meclisi</button>`)+
+ katUyariRozeti()+ /* v50: kategorisi genel kalmış / gider defterine yazılmamış kayıt varsa uyar */
  `<div class="card"><div class="filters">
    <span class="mut" style="align-self:center">Dönem:</span>
    <input type="date" value="${from}" data-actv="repSetFrom">
@@ -4534,14 +4634,23 @@ function cekKapat(id){
  if(c.durum!=='portfoy'&&c.durum!=='tahsilde')return toast('Bu çek zaten kapatılmış/ciro edilmiş');
  const opts=accOpts(CO);
  if(!opts.length)return toast('Önce Banka & Kasa ekranından bir hesap ekleyin');
+ /* v50: cek kapatma kar/zarar defterine yaziyor ama kategori 'Diger Gelir/Gider'
+    olarak sabitti — gider raporunda detay kalmiyordu. Artik secilebilir; cek bir
+    cariye bagliysa o carinin varsayilan kategorisi hazir gelir. */
+ var _cekCari=c.cariId?(S.cari.find(function(x){return x.id===c.cariId&&!x.deletedAt;})||null):null;
+ var _cekYon=c.tip==='alinan'?'gelir':'gider';
  openForm((c.tip==='alinan'?'Tahsilat':'Ödeme')+' — '+c.kisi,[
   {name:'accId',label:c.tip==='alinan'?'Hangi hesaba tahsil edildi':'Hangi hesaptan ödendi',type:'select',opts,req:1,def:c.tahsilAccId||''},
-  {name:'date',label:'İşlem tarihi',type:'date',def:todayISO(),req:1}
+  {name:'date',label:'İşlem tarihi',type:'date',def:todayISO(),req:1},
+  {name:'cat',label:'Kategori (kâr/zarar raporunda bu kaleme işlenir)',type:'select',
+   opts:cariKatOpts(_cekCari,_cekYon),def:cariDefCat(_cekCari,_cekYon)||(_cekYon==='gelir'?'Diğer Gelir':'Diğer Gider'),req:1}
  ],o=>{
   c.prevDurum=c.durum; c.durum='kapandi'; // v14-K7
   var _cc=c.cariId?S.cari.find(function(x){return x.id===c.cariId&&!x.deletedAt;}):null; // v14-H9: silinmiş cariye yazma
+  var _ckat=o.cat||(c.tip==='alinan'?'Diğer Gelir':'Diğer Gider');
+  ensureCat(c.tip==='alinan'?'gelir':'gider',_ckat);
   S.txns.push(stampCreate({id:nid(),co:CO,type:c.tip==='alinan'?'gelir':'gider',date:o.date,amount:+c.tutar,cekId:id,
-   cat:c.tip==='alinan'?'Diğer Gelir':'Diğer Gider',accId:o.accId,
+   cat:_ckat,accId:o.accId,
    desc:(c.tur==='senet'?'Senet':'Çek')+(c.tip==='alinan'?' tahsilatı: ':' ödemesi: ')+c.kisi+(c.no?' ('+c.no+')':'')}));
   var _msg=c.tip==='alinan'?'Çek tahsil edildi, gelir işlendi':'Çek ödendi, gider işlendi';
   if(_cc){
@@ -4804,12 +4913,15 @@ function assetSellForm(id){
  if(!opts.length)return toast('Önce Banka & Kasa ekranından bir hesap ekleyin');
  openForm('💰 Sat / Hurdaya Ayır — '+a.name,[
   {row:[{name:'amount',label:'Satış bedeli (₺ — hurda/bedelsizse 0)',type:'number',req:1,def:0},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
-  {name:'accId',label:'Para hangi hesaba girdi (bedel > 0 için zorunlu)',type:'select',opts:accOpts(CO,1)}
+  {name:'accId',label:'Para hangi hesaba girdi (bedel > 0 için zorunlu)',type:'select',opts:accOpts(CO,1)},
+  /* v50: satış geliri 'Diğer Gelir' olarak sabitti — kategori seçilebilir oldu */
+  {name:'cat',label:'Gelir kategorisi',type:'select',opts:catOptsUser('gelir'),def:'Diğer Gelir'}
  ],o=>{
   if(+o.amount>0&&!o.accId){toast('⚠ Satış bedeli girdiniz — paranın girdiği hesabı seçin (boşta para yasak).');return;}
   a.durum='hurda';
   if(+o.amount>0){
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gelir',date:o.date,amount:+o.amount,cat:'Diğer Gelir',accId:o.accId,assetId:id,desc:'Demirbaş satışı: '+a.name}));
+   var _akat=o.cat||'Diğer Gelir'; ensureCat('gelir',_akat);
+   S.txns.push(stampCreate({id:nid(),co:CO,type:'gelir',date:o.date,amount:+o.amount,cat:_akat,accId:o.accId,assetId:id,desc:'Demirbaş satışı: '+a.name}));
   }
   try{logAudit('Demirbaş satış/hurda',a.name+' '+fmt0(o.amount));}catch(e){}
   save();toast(+o.amount>0?'Demirbaş satıldı — gelir hesaba işlendi':'Demirbaş hurdaya ayrıldı');go('asset');
@@ -4897,7 +5009,7 @@ function budgetForm(id){
  const init=id?S.budgets.find(x=>x.id===id):{type:'gider'};
  openForm(id?'Bütçe Düzenle':'Bütçe Kalemi',[
   {name:'type',label:'Tür',type:'select',opts:[['gider','Gider bütçesi (üstüne çıkma)'],['gelir','Ciro / gelir hedefi (altında kalma)']]},
-  {name:'cat',label:'Kategori',type:'select',opts:catOpts((init&&init.type)==='gelir'?'gelir':'gider'),req:1},
+  {name:'cat',label:'Kategori',type:'select',opts:catOptsUser((init&&init.type)==='gelir'?'gelir':'gider'),req:1},
   {name:'amount',label:'Aylık hedef (₺)',type:'number',req:1,min:1}
  ],o=>{
   if(id)applyEdit(init,o);
@@ -4911,8 +5023,11 @@ function budgetForm(id){
   var tp=document.querySelector('#mForm select[name="type"]'),cat=document.querySelector('#mForm select[name="cat"]');
   if(!tp||!cat)return;
   var fill=function(){
-   var opts=catOpts(tp.value==='gelir'?'gelir':'gider');
+   var opts=catOptsUser(tp.value==='gelir'?'gelir':'gider').slice();
    var cur=cat.value;
+   /* v50: eski bir bütçe kalemi artık listelenmeyen bir kategoriye bağlı olabilir —
+      liste yeniden kurulurken sessizce ilk kaleme kaymasın. */
+   if(cur&&!opts.some(function(c){return (Array.isArray(c)?c[0]:c)===cur;}))opts.unshift([cur,cur+' (mevcut — listede yok)']);
    cat.innerHTML=opts.map(function(c){var v=Array.isArray(c)?c[0]:c,l=Array.isArray(c)?c[1]:c;return '<option value="'+esc(v)+'">'+esc(l)+'</option>';}).join('');
    if(opts.some(function(c){return String(Array.isArray(c)?c[0]:c)===String(cur);}))cat.value=cur;
   };
@@ -7519,8 +7634,22 @@ function merkezKayitYaz(coId,o){
  var mcardId=isCard?(S.cardTxns.filter(function(x){return x.icId===icId;})[0]||{}).id:'';
  var sonCariEklendi=false;
  if(o.hedef==='cari'){
-  pushRec(S.cariTxns,{id:nid(),co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
+  /* v50 KRİTİK DÜZELTME — merkezden yapılan cari ödemesi ŞİRKETİN GİDER RAPORUNDA
+     HİÇ GÖRÜNMÜYORDU. Yalnızca cari bakiyesi düşülüyor, kâr/zarar defterine (S.txns)
+     tek satır bile yazılmıyordu. Oysa aynı ödeme şirketin kendi bankasından yapılınca
+     gider kaydı oluşuyor (cariTxnForm) — iki yol arasında tutarsızlık vardı ve
+     "merkezden ödediğim gider raporda yok" sorununun sebebi buydu.
+     Kayıt cariTxnId taşır; böylece TAHAKKUK modunda (skipCariLinked) çift sayılmaz. */
+  var _mcId=nid();
+  pushRec(S.cariTxns,{id:_mcId,co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
    desc:'🏛 Merkezden ödendi'+(desc?' — '+desc:''),nakit:'',accId:'',mrk:1,ic:true,icId:icId});
+  var _cr=S.cari.find(function(x){return x.id===o.cariId;})||{};
+  var _kat=o.cat||cariDefCat(_cr,'gider')||'Diğer Gider';
+  ensureCat('gider',_kat);
+  pushRec(S.txns,{id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
+   src:isCard?'merkez-kart':'merkez',cat:_kat,cariId:o.cariId,cariTxnId:_mcId,
+   desc:'🏛 Merkezden ödendi — '+(_cr.name||'Cari')+(desc?' — '+desc:''),
+   ic:true,icId:icId});
  }else if(o.hedef==='kart'){
   pushRec(S.cardTxns,{id:nid(),co:coId,cardId:o.hedefCard,type:'odeme',amount:amt,date:o.date,
    desc:'🏛 Merkezden kart borcu ödemesi'+(desc?' — '+desc:''),ic:true,icId:icId});
@@ -7535,22 +7664,29 @@ function merkezKayitYaz(coId,o){
   sonCariEklendi=true;
  }else{
   var stxId='',cat='',baseDesc='🏛 Merkezden ödendi'+(desc?' — '+desc:''),fx=null;
+  /* v50 DENETİM: bu dalda cariye de borç yazıldığında gider kaydı cariTxnId TAŞIMIYORDU.
+     TAHAKKUK modunda skipCariLinked onu eleyemiyor, accrualAdjust ise aynı alışın
+     faturasını ayrıca ekliyordu → aynı gider İKİ KEZ sayılıyordu. Artık bağlanıyor. */
+  var _gcId='';
   if(o.hedef==='maas'){
    stxId=nid();cat='Personel';
    pushRec(S.staffTxns,{id:stxId,co:coId,staffId:o.staffId,type:o.stype||'maas',amount:amt,date:o.date,
     period:o.period||'',accId:'',desc:baseDesc,ic:true,icId:icId});
   }else if(o.hedef==='sabit'){
    fx=S.fixed.find(function(x){return x.id===o.fixedId&&!x.deletedAt;})||{type:'fatura',name:'?'};
+   /* v50: asagida uretilen cari borc kaydinin kimligi gider kaydina baglanacak */
    cat= fx.type==='kira'?'Kira': fx.type==='fatura'?'Fatura & Abonelik':'Vergi & SGK';
    baseDesc='🏛 Merkezden ödendi — '+(FTYPE[fx.type]||'')+': '+fx.name+' ('+mTR(o.period)+')'+(desc?' — '+desc:'');
    if(fx.cariId&&S.cari.find(function(x){return x.id===fx.cariId&&!x.deletedAt;})){
-    pushRec(S.cariTxns,{id:nid(),co:coId,cariId:fx.cariId,type:'borc',amount:amt,date:o.date,
+    _gcId=nid();
+    pushRec(S.cariTxns,{id:_gcId,co:coId,cariId:fx.cariId,type:'borc',amount:amt,date:o.date,
      desc:'Sabit ödeme (merkezden): '+fx.name+' ('+mTR(o.period)+')',nakit:'',accId:'',mrk:1,ic:true,icId:icId});
    }
   }else{
    cat=o.cat;
    if(o.cariId&&S.cari.find(function(x){return x.id===o.cariId&&!x.deletedAt;})){ /* v40: gider + aynı anda cariye ödeme */
-    pushRec(S.cariTxns,{id:nid(),co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
+    _gcId=nid();
+    pushRec(S.cariTxns,{id:_gcId,co:coId,cariId:o.cariId,type:'borc',amount:amt,date:o.date,
      desc:'🏛 Merkezden ödendi'+(desc?' — '+desc:''),nakit:'',accId:'',mrk:1,ic:true,icId:icId});
    }
   }
@@ -7559,6 +7695,13 @@ function merkezKayitYaz(coId,o){
    var tx={id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
     src:isCard?'merkez-kart':'merkez',cat:cat,desc:baseDesc,ic:true,icId:icId};
    if(o.vat)tx.vat=o.vat;
+   /* v50 DENETİM-2: burada cariTxnId TAKILMAZ. Bu kayıt bir fatura ödemesi değil,
+      DOĞRUDAN gider girişidir; skipCariLinked onu tahakkuk raporundan tamamen silerdi
+      (gider 0 görünürdü). Yalnızca cariId bağlanır — ekstrede 1 cari çipi verir,
+      rapor toplamını değiştirmez. Cariye AYRICA alış faturası da girildiyse tahakkukta
+      çift sayım oluşur; bu, aynı gideri iki kez girmenin doğal sonucudur ve cari
+      bakiyesinde de görünür. */
+   if(_gcId)tx.cariId=(o.hedef==='sabit'?fx.cariId:o.cariId);
    if(mcardId)tx.cardTxnId=mcardId;
    if(stxId)tx.staffTxnId=stxId;
    firstTxId=tx.id;pushRec(S.txns,tx);
@@ -7569,6 +7712,7 @@ function merkezKayitYaz(coId,o){
     var tx2={id:nid(),co:coId,type:'gider',date:addMonthsClamped(o.date,ti),amount:part,accId:'',
      src:'merkez-kart',cat:cat,taksitNo:(ti+1)+'/'+N,cardTxnId:mcardId,
      desc:baseDesc+' (taksit '+(ti+1)+'/'+N+')',ic:true,icId:icId};
+    if(_gcId)tx2.cariId=o.cariId;   /* v50 DENETİM-2: cariTxnId takma — yukarıdaki gerekçe */
     if(!firstTxId)firstTxId=tx2.id;
     pushRec(S.txns,tx2);
    }
@@ -7606,7 +7750,7 @@ function merkezOdeForm(coId,init){
  openForm('🏛 Merkezden Ödeme — '+coName(coId),[
   {name:'hedef',label:'Ödeme neyin karşılığı?',type:'select',req:1,opts:[
    ['gider','📄 Doğrudan gider (fatura, harcama) — şirketin kâr/zararına yazılır'],
-   ['cari','🤝 Şirketin bir carisine ödeme — cari borcu kapanır (gider TEKRAR yazılmaz)'],
+   ['cari','🤝 Şirketin bir carisine ödeme — cari borcu kapanır + şirketin giderine yazılır'],
    ['maas','👤 Şirketin personeline maaş / avans / prim'],
    ['sabit','📅 Şirketin sabit ödemesi (kira / vergi / SGK / fatura)'],
    ['kart','💳 Şirketin KREDİ KARTI borcunu ödeme — gider değildir, borç kapanır'],
@@ -7614,7 +7758,9 @@ function merkezOdeForm(coId,init){
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'method',label:'Merkezde hangi hesaptan / kartla ödendi?',type:'select',req:1,opts:payMethodOpts('merkez')},
   {name:'taksit',label:'Taksit — yalnızca merkez KREDİ KARTI + “Doğrudan gider” seçiminde geçerlidir',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']],def:1},
-  {name:'cat',label:'Gider kategorisi (yalnızca “Doğrudan gider” için)',type:'select',opts:[['','— Seçin —']].concat(catOpts('gider'))},
+  /* v50: kategori artik "Carisine odeme" icin de gerekli — o odeme sirketin
+     kar/zarar defterine yazildigindan hangi kaleme dusecegi belirtilmeli. */
+  {name:'cat',label:'Gider kategorisi (“Doğrudan gider” ve “Carisine ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(catOptsUser('gider'))},
   {name:'cariId',label:'Cari (yalnızca “Carisine ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(caris.map(function(c){return [c.id,c.name];}))},
   {row:[
    {name:'staffId',label:'Personel (yalnızca “Personele ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(staff.map(function(s){return [s.id,s.name];}))},
@@ -7631,6 +7777,14 @@ function merkezOdeForm(coId,init){
   if(!o.method){toast('Merkezde hangi hesaptan ödendiğini seçin');return merkezOdeForm(coId,o);}
   if(o.hedef==='gider'&&!o.cat){toast('Gider kategorisi seçin — kâr/zarar tablosunda hangi kaleme yazılacağı buradan belirlenir');return merkezOdeForm(coId,o);}
   if(o.hedef==='cari'&&!o.cariId){toast('Hangi cariye ödeme yapıldığını seçin');return merkezOdeForm(coId,o);}
+  /* v50: cari odemesi artik sirketin giderine yaziliyor — kalemi belli olmali.
+     Cari kartinda varsayilan kategori taniliysa otomatik dolar, sorulmaz. */
+  if(o.hedef==='cari'&&!o.cat){
+   var _c0=S.cari.find(function(x){return x.id===o.cariId;})||{};
+   var _d0=cariDefCat(_c0,'gider');
+   if(_d0)o.cat=_d0;
+   else{toast('Gider kategorisi seçin — bu ödeme '+coName(coId)+' şirketinin gider raporuna bu kalemle yazılacak. (Cari kartına varsayılan kategori girerseniz bir daha sorulmaz.)');return merkezOdeForm(coId,o);}
+  }
   if(o.hedef==='maas'&&!o.staffId){toast('Hangi personele ödeme yapıldığını seçin');return merkezOdeForm(coId,o);}
   if(o.hedef==='kart'&&!o.hedefCard){toast('Hangi kredi kartının borcunun ödendiğini seçin');return merkezOdeForm(coId,o);}
   if(o.hedef==='kasa'&&!o.hedefAcc){toast('Paranın hangi kasaya/bankaya gireceğini seçin');return merkezOdeForm(coId,o);}
@@ -7639,7 +7793,7 @@ function merkezOdeForm(coId,init){
    if(!o.period){toast('Sabit ödemenin dönemini seçin');return merkezOdeForm(coId,o);}
    if(!S.fixed.find(function(x){return x.id===o.fixedId&&!x.deletedAt;})){toast('Sabit ödeme tanımı bulunamadı');return merkezOdeForm(coId,o);}
    if(S.fixedLogs.some(function(l){return l.fixedId===o.fixedId&&l.period===o.period&&!l.deletedAt;})){
-    toast('⚠ '+mTR(o.period)+' dönemi için bu tanıma ait ödeme kaydı zaten var — mükerrer kayıt engellendi.');return;
+    toast('⚠ '+mTR(o.period)+' dönemi için bu tanıma ait ödeme kaydı zaten var — mükerrer kayıt engellendi. Dönemi değiştirip tekrar deneyin.');return merkezOdeForm(coId,o);  /* v50: girilen veriler kaybolmasın */
    }
   }
   /* v41: form alanları yalnızca GİZLENİYOR, değerleri temizlenmiyordu. Kullanıcı önce "cariye ödeme"
@@ -7650,7 +7804,7 @@ function merkezOdeForm(coId,init){
   if(o.hedef!=='sabit'){o.fixedId='';}
   if(o.hedef!=='kart')o.hedefCard='';
   if(o.hedef!=='kasa')o.hedefAcc='';
-  if(o.hedef!=='gider')o.cat='';
+  if(o.hedef!=='gider'&&o.hedef!=='cari')o.cat='';  /* v50: cari ödemesi de kategori taşır */
   if(o.hedef!=='maas'&&o.hedef!=='sabit')o.period='';
   var isCard=String(o.method).indexOf('card:')===0;
   if((+o.taksit||1)>1&&(!isCard||o.hedef!=='gider'))toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ödemelerinde uygulanır — bu kayıt tek çekim olarak işlendi');
@@ -8202,7 +8356,8 @@ function merkezOdeBind(coId){
  formBind(function(){
   var hedef=fldVal('hedef'),method=fldVal('method'),isCard=String(method).indexOf('card:')===0;
   var cardId=isCard?String(method).slice(5):'',accId=isCard?'':method;
-  fldShow('cat',hedef==='gider');
+  fldShow('cat',hedef==='gider'||hedef==='cari');   /* v50 */
+  if(hedef==='cari'){var _dc=cariDefCat(S.cari.find(function(x){return x.id===fldVal('cariId');}),'gider');if(_dc)fldAuto('cat',_dc);}
   fldShow('cariId',hedef==='cari');
   fldShow('staffId',hedef==='maas');fldShow('stype',hedef==='maas');
   fldShow('fixedId',hedef==='sabit');fldShow('period',hedef==='sabit'||hedef==='maas'); /* v41: maaş dönemi de seçilebilmeli */
@@ -8234,7 +8389,7 @@ function merkezOdeBind(coId){
    var cr=S.cari.find(function(x){return x.id===fldVal('cariId');});
    if(cr){var yb=cariBalance(cr)+amt;
     rows.push('<b>'+esc(coName(coId))+'</b> · '+esc(cr.name)+' cari borcu kapanıyor: '+fmt0(cariBalance(cr))+' → <b>'+fmt0(yb)+'</b>');
-    rows.push('Gider <b>TEKRAR yazılmaz</b> (fatura girildiğinde zaten yazılmıştı)');
+    rows.push('<b>'+esc(coName(coId))+'</b> gider defterine <b>'+esc(fldVal('cat')||'— kategori seçin —')+'</b> kalemiyle yazılır — artık gider raporunda görünür (tahakkuk modunda çift saymaz)');
     if(yb>0.01)warns.push(esc(cr.name)+' bu ödemeden sonra BİZE '+fmt0(yb)+' borçlu görünecek — fazla ödeme yapıyor olabilirsiniz');
    }else warns.push('Hangi cariye ödeme yapıldığını seçin');
   }else if(hedef==='kart'){
@@ -10493,8 +10648,8 @@ function ekstreOnizle(hata){
  /* v48 DENETIM (ORTA): hata bandi ilk duzenlemede kayboluyordu - "bir sayfa okunamadi"
     bilgisi silinince eksik ekstre tam saniliyordu. Artik durumda saklanir. */
  if(hata!==undefined)EKSTRE.hata=hata; else hata=EKSTRE.hata;
- var kats=catOpts('gider').map(function(c){return Array.isArray(c)?c[0]:c;});
- var katsG=catOpts('gelir').map(function(c){return Array.isArray(c)?c[0]:c;});
+ var kats=catOptsUser('gider').map(function(c){return Array.isArray(c)?c[0]:c;});
+ var katsG=catOptsUser('gelir').map(function(c){return Array.isArray(c)?c[0]:c;});
  var giris=0,cikis=0,secili=0,muk=0;
  _ekMukIdx=ekstreMukIndeks(EKSTRE.hedef,EKSTRE.tur);   /* v49: tek sefer kur */
  EKSTRE.satirlar.forEach(function(s,i){
@@ -11305,4 +11460,413 @@ function konGunSec(g){
  konTab='akis';
  rKontrol();
  toast('📅 '+dTR(g)+' işlemleri listelendi');
+}
+
+
+/* ==================== v50: KATEGORİ DÜZELTME MERKEZİ ====================
+   Neden var: v50'ye kadar cari ödemeleri "Diğer Gider" olarak sabit yazılıyordu ve
+   MERKEZDEN yapılan cari ödemeleri şirketin kâr/zarar defterine HİÇ yazılmıyordu.
+   Bu yüzden geçmiş dönem gider raporları detaysız ve eksik. Bu ekran o geçmişi
+   ONAYINIZLA düzeltir — hiçbir şey kendiliğinden değişmez, her düzeltme denetim
+   günlüğüne ve İşlem Kontrol Merkezi'ne düşer, tamamı geri alınabilir. */
+
+var katTab='genel';            /* genel | eksik */
+var katSecim={};               /* CO|sekme|grupId -> secilen kategori */
+function setKatTab(v){katTab=v;rKatDuzelt();}
+/* v50 DENETİM: anahtar yalnızca cariId olsaydı "Genel" sekmesinde seçilen bir GELİR
+   kategorisi, "Eksik" sekmesindeki GİDER kaydına sızardı; aynı şey şirket değişiminde
+   de olurdu. Anahtar artık şirket + sekme kapsamlı. */
+function katKey(gid){return CO+'|'+katTab+'|'+gid;}
+
+/* "Genel" sayilan kategoriler — detaysiz kalmis kayitlar */
+var KAT_GENEL={'Diğer Gider':1,'Diğer Gelir':1,'':1,'Diğer':1,'Cari Ödeme':1,'Fatura Gideri':1};
+
+/* Duzeltme listelerinde onerilecek kategoriler: sistem kalemleri (Grup İçi) ve
+   zaten "genel" sayilan kalemler (Diğer Gider) secilemez — ikisi de duzeltme degil. */
+function katSecOpts(yon){
+ return catOptsUser(yon).filter(function(c){var v=Array.isArray(c)?c[0]:c;return !KAT_GENEL[v];});
+}
+
+/* Bir cari grubunun hangi yonde duzeltilecegi — gider varsa gider onceliklidir,
+   cunku kullanicinin sikayeti gider raporlarinin detaysiz olmasiydi. */
+function katGrupYon(g){
+ return g.kayitlar.some(function(x){return x.t&&x.t.type==='gider';})?'gider':
+        (g.kayitlar.some(function(x){return x.t&&x.t.type==='gelir';})?'gelir':'gider');
+}
+
+/* v50 DENETİM (başarım): eskiden her kayıt için S.cari.find() çağrılıyordu — binlerce
+   kayıtta kare karmaşıklık. Rapor/Cari ekranları her filtre değişiminde yeniden
+   çizildiği için bu fark hissediliyordu. Artık tek seferlik indeks kuruluyor. */
+function katIndeks(co){
+ var cm={},ctm={};
+ S.cari.forEach(function(c){cm[c.id]=c;});
+ S.cariTxns.forEach(function(x){if(x.co===co)ctm[x.id]=x;});
+ return {cari:cm,cariTxn:ctm};
+}
+
+/* 1) Kategorisi genel kalmis, CARIYE BAGLI nakit hareketleri */
+function katGenelKayitlar(co,IX){
+ IX=IX||katIndeks(co);
+ var out=[];
+ S.txns.forEach(function(t){
+  if(t.co!==co||t.deletedAt)return;
+  if(t.type==='virman'||t.xfer)return;
+  if(!t.cariId&&!t.cariTxnId)return;            /* yalnizca cariye bagli olanlar */
+  if(!KAT_GENEL[t.cat||''])return;
+  /* v50 DENETİM: cariId boş ama cariTxnId dolu kayıtlar da var (fixOrphanTxn bunları
+     üretiyor). Eskiden hepsi tek "(cari silinmiş)" satırında toplanıp topluca yanlış
+     kategoriye taşınabiliyordu. Artık cari, cari hareketi üzerinden de çözülüyor. */
+  var c=IX.cari[t.cariId];
+  if(!c&&t.cariTxnId){var ct=IX.cariTxn[t.cariTxnId];if(ct)c=IX.cari[ct.cariId];}
+  if(c&&c.sys)return;                            /* merkez/ortak ayna hesabi degil */
+  out.push({t:t,cari:c,cariAd:(c&&c.name)||'(cari bağı kopuk)',yon:t.type});
+ });
+ out.sort(function(a,b){return a.cariAd<b.cariAd?-1:a.cariAd>b.cariAd?1:(a.t.date<b.t.date?1:-1);});
+ return out;
+}
+
+/* 2) MERKEZDEN odenmis ama sirketin gider defterinde KARSILIGI OLMAYAN cari odemeleri.
+   Isaret: cariTxn'de mrk:1 var; ayni icId ile ya da cariTxnId ile eslesen bir
+   S.txns gider kaydi YOK. (icId alani cok eski kayitlarda bulunmayabilir; o yuzden
+   cariTxnId uzerinden de bakilir.) */
+function katEksikGiderler(co,IX){
+ IX=IX||katIndeks(co);
+ var out=[],txByIc={},txByCt={};
+ S.txns.forEach(function(t){
+  if(t.co!==co||t.deletedAt)return;
+  if(t.icId)txByIc[t.icId]=1;
+  if(t.cariTxnId)txByCt[t.cariTxnId]=1;
+ });
+ S.cariTxns.forEach(function(ct){
+  if(ct.co!==co||ct.deletedAt||!ct.mrk||ct.type!=='borc')return;
+  if(ct.icId&&txByIc[ct.icId])return;           /* karsiligi zaten var */
+  if(txByCt[ct.id])return;                      /* bu ekrandan daha once yazilmis */
+  var c=IX.cari[ct.cariId];
+  if(c&&c.sys)return;                            /* merkez aynasi degil, gercek cari */
+  out.push({ct:ct,cari:c,cariAd:(c&&c.name)||'(cari silinmiş)'});
+ });
+ out.sort(function(a,b){return a.ct.date<b.ct.date?1:-1;});
+ return out;
+}
+
+/* Cari bazinda gruplar. Carisi cozulemeyen kayitlar TEK TEK kalir — toplu islem
+   farkli tedarikcilerin kayitlarini ayni kaleme tasimasin. */
+function katGrupla(list,anahtar){
+ var g={},sira=[];
+ list.forEach(function(x){
+  var tekil=!(x.cari&&x.cari.id);
+  var k=tekil?('_t'+((anahtar==='ct'?x.ct.id:x.t.id))):x.cari.id;
+  if(!g[k]){g[k]={id:k,ad:x.cariAd,cari:x.cari||null,tekil:tekil,kayitlar:[],tutar:0};sira.push(k);}
+  g[k].kayitlar.push(x);
+  g[k].tutar+=Math.abs(+(anahtar==='ct'?x.ct.amount:x.t.amount)||0);
+ });
+ return sira.map(function(k){return g[k];}).sort(function(a,b){return b.tutar-a.tutar;});
+}
+
+function rKatDuzelt(){
+ _navHi('rep');   /* menüde "Raporlar" vurgulu kalsın — kullanıcı nerede olduğunu bilsin */
+ if(CO==='grup'||CO==='merkez'){
+  document.getElementById('main').innerHTML=topbar('🏷 Kategori Düzeltme Merkezi','')+
+   '<div class="card"><div class="empty"><b>Önce bir şirket seçin</b>'+
+   'Kategori düzeltmesi tek tek şirketlerin kâr/zarar defteri üzerinde yapılır. '+
+   'Üstteki şirket seçiciden bir şirkete geçtikten sonra bu ekranı açın.</div></div>';
+  return;
+ }
+ if(!can('kayit.duzenle')){
+  document.getElementById('main').innerHTML=topbar('🏷 Kategori Düzeltme Merkezi','')+
+   '<div class="card"><div class="empty"><b>Bu ekran için yetkiniz yok</b>'+
+   '“✎ Var olan kaydı düzenleyebilir” yetkisi gerekir — Ayarlar &gt; Kullanıcılar bölümünden verilebilir.</div></div>';
+  return;
+ }
+ var IX=katIndeks(CO);
+ var genel=katGenelKayitlar(CO,IX), eksik=katEksikGiderler(CO,IX);
+ var gGrup=katGrupla(genel,'t'), eGrup=katGrupla(eksik,'ct');
+ var gTut=genel.reduce(function(s,x){return s+Math.abs(+x.t.amount||0);},0);
+ var eTut=eksik.reduce(function(s,x){return s+Math.abs(+x.ct.amount||0);},0);
+
+ document.getElementById('main').innerHTML= topbar('🏷 Kategori Düzeltme Merkezi',
+  '<button class="btn gh" data-act="go" data-arg="rep">📊 Raporlara dön</button>'+
+  '<button class="btn gh" data-act="go" data-arg="cari">🤝 Cari Hesaplar</button>')+
+
+ '<div class="card" style="margin-bottom:12px;background:var(--acc-soft);padding:12px 14px"><p class="tiny" style="margin:0">'+
+  '🏷 <b>Bu ekran geçmiş kayıtları düzeltir — hiçbir şey siz onaylamadan değişmez.</b><br>'+
+  'Önceki sürümlerde cari ödemeleri <b>“Diğer Gider”</b> olarak sabit yazılıyordu, '+
+  '<b>merkezden yapılan cari ödemeleri</b> ise şirketin kâr/zarar defterine hiç işlenmiyordu. '+
+  'Bu yüzden eski dönem gider raporlarınız detaysız ve eksik. Aşağıdan cari cari düzeltebilirsiniz. '+
+  'Yapılan her düzeltme <b>denetim günlüğüne</b> yazılır ve <b>İşlem Kontrol Merkezi</b>\'nde görünür.'+
+ '</p></div>'+
+
+ '<div class="grid g3" style="margin-bottom:12px">'+
+  '<div class="kpi '+(genel.length?'w':'p')+'"><div class="l">Kategorisi Genel Kalmış</div><div class="v">'+genel.length+'</div><div class="s">'+fmt0(gTut)+' · '+gGrup.length+' kalem</div></div>'+
+  '<div class="kpi '+(eksik.length?'n':'p')+'"><div class="l">Eksik Gider Kaydı</div><div class="v">'+eksik.length+'</div><div class="s">'+fmt0(eTut)+' · merkezden ödenmiş</div></div>'+
+  '<div class="kpi a"><div class="l">Toplam Etki</div><div class="v">'+fmt0(gTut+eTut)+'</div><div class="s">raporlara yansıyacak tutar</div></div>'+
+ '</div>'+
+
+ seg([['genel','🏷 Kategorisi Genel Kalmış ('+genel.length+')'],['eksik','➕ Eksik Gider Kaydı ('+eksik.length+')']],katTab,'setKatTab')+
+
+ (katTab==='eksik'? katEksikKart(eGrup) : katGenelKart(gGrup));
+}
+
+/* Ortak: bir grup satirinin kategori <select>'i */
+function katSelect(gid,yon,tercihler,ad){
+ var L=katSecOpts(yon),sec='';
+ /* Önerilmeyen (sistem / genel / yanlış yön) bir değer önbellekte kalmış olabilir.
+    Sırayla denenir: önce kullanıcının bu oturumda seçtiği, sonra cari kartındaki
+    varsayılan. Geçersiz olan atlanır — yoksa geçerli varsayılan hiç görünmezdi. */
+ (tercihler||[]).some(function(v){
+  if(v&&L.some(function(c){return (Array.isArray(c)?c[0]:c)===v;})){sec=v;return true;}
+  return false;});
+ return '<select data-actv="katSec" data-arg="'+esc(gid)+'" style="min-width:170px" '+
+  'aria-label="'+esc(ad)+' için yeni kategori" title="'+esc(ad)+' kayıtlarının taşınacağı kalem">'+
+  '<option value="">— Seçin —</option>'+
+  L.map(function(c){var v=Array.isArray(c)?c[0]:c;
+   return '<option value="'+esc(v)+'"'+(v===sec?' selected':'')+'>'+esc(v)+'</option>';}).join('')+
+  '</select>';
+}
+
+/* ---------- sekme 1: kategorisi genel kalmislar ---------- */
+function katGenelKart(gruplar){
+ if(!gruplar.length)
+  return '<div class="card" style="border-left:4px solid var(--pos)"><h2>✓ Düzeltilecek kayıt yok</h2>'+
+   '<p class="tiny" style="margin:0">'+esc(coName(CO))+' şirketinde kategorisi genel kalmış cari hareketi bulunmuyor. Raporlarınız bu açıdan temiz.</p></div>';
+
+ return '<div class="card"><h2>🏷 Cari Bazında Toplu Düzeltme <span class="tiny">bir kategori seçip “Uygula” deyin — o carinin tüm kayıtları düzelir</span></h2>'+
+  '<p class="tiny" style="margin-bottom:10px">Seçtiğiniz kategori aynı zamanda <b>cari kartına varsayılan olarak da yazılır</b>; '+
+  'böylece o cariyle yapacağınız yeni işlemlerde kategori hazır gelir ve bir daha bu ekrana düşmez. '+
+  'Carisi çözülemeyen kayıtlar <b>tek tek</b> listelenir — farklı tedarikçilerin kayıtları yanlışlıkla aynı kaleme taşınmasın diye.</p>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Cari</th><th class="num">Kayıt</th><th class="num">Tutar</th><th>Yeni kategori</th><th class="rowact"></th></tr></thead><tbody>'+
+  gruplar.map(function(g){
+   var gid=g.id;
+   var gelirVar=g.kayitlar.some(function(x){return x.t.type==='gelir';});
+   var giderVar=g.kayitlar.some(function(x){return x.t.type==='gider';});
+   var yon=katGrupYon(g);
+   var ayniYon=g.kayitlar.filter(function(x){return (x.t.type==='gelir'?'gelir':'gider')===yon;}).length;
+   var sec=[katSecim[katKey(gid)],(g.cari?cariDefCat(g.cari,yon):'')];
+   return '<tr>'+
+    '<td><b>'+esc(g.ad)+'</b>'+(gelirVar&&giderVar?' <span class="chip w" title="Bu carinin hem gelir hem gider kaydı var. Uygula dediğinizde yalnızca '+yon+' kayıtları düzelir; diğer yön için kategoriyi değiştirip tekrar uygulayın.">gelir+gider</span>':'')+
+      '<div class="tiny">'+g.kayitlar.slice(0,2).map(function(x){return dTR(x.t.date)+' · '+esc((x.t.desc||'').slice(0,40));}).join('<br>')+
+      (g.kayitlar.length>2?'<br>+'+(g.kayitlar.length-2)+' kayıt daha':'')+'</div></td>'+
+    '<td class="num"><b>'+ayniYon+'</b>'+(ayniYon!==g.kayitlar.length?'<div class="tiny">/'+g.kayitlar.length+'</div>':'')+'</td>'+
+    '<td class="num">'+fmt0(g.tutar)+'</td>'+
+    '<td>'+katSelect(gid,yon,sec,g.ad)+'</td>'+
+    '<td class="rowact"><button class="btn sm" data-act="katUygula" data-arg="'+esc(gid)+'" title="'+esc(g.ad)+' kayıtlarını seçilen kaleme taşı">Uygula</button></td></tr>';
+  }).join('')+'</tbody></table></div>'+
+  '<div class="cardBtns" style="margin-top:10px">'+
+   '<button class="btn gh" data-act="katListeAc">📄 Tüm kayıtları listele</button>'+
+  '</div></div>';
+}
+
+/* ---------- sekme 2: eksik gider kayitlari ---------- */
+function katEksikKart(gruplar){
+ if(!gruplar.length)
+  return '<div class="card" style="border-left:4px solid var(--pos)"><h2>✓ Eksik gider kaydı yok</h2>'+
+   '<p class="tiny" style="margin:0">'+esc(coName(CO))+' şirketinde merkezden ödenip gider defterine yazılmamış cari ödemesi bulunmuyor.</p></div>';
+
+ return '<div class="card" style="border-left:4px solid var(--neg)"><h2>➕ Merkezden Ödenmiş ama Gider Yazılmamış</h2>'+
+  '<p class="tiny" style="margin-bottom:10px">Aşağıdaki ödemeler merkez tarafından yapılmış, cari borcunuz düşmüş — '+
+  'ancak <b>'+esc(coName(CO))+' şirketinin gider defterine hiç yazılmamış</b>, bu yüzden kâr/zarar raporunda görünmüyorlar. '+
+  '“Gider kaydını oluştur” dediğinizde eksik kayıt seçtiğiniz kategoriyle yazılır. '+
+  '<b>Cari bakiyeniz ve merkez borcunuz DEĞİŞMEZ</b> — yalnızca eksik olan gider satırı eklenir. '+
+  'Yanlış olursa o satırı tek başına silebilirsiniz; merkez ödemesine dokunulmaz, kayıt yeniden bu listeye düşer.</p>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Cari</th><th class="num">Kayıt</th><th class="num">Tutar</th><th>Kategori</th><th class="rowact"></th></tr></thead><tbody>'+
+  gruplar.map(function(g){
+   var gid=g.id;
+   var sec=[katSecim[katKey(gid)],(g.cari?cariDefCat(g.cari,'gider'):'')];
+   return '<tr>'+
+    '<td><b>'+esc(g.ad)+'</b>'+
+      '<div class="tiny">'+g.kayitlar.slice(0,2).map(function(x){return dTR(x.ct.date)+' · '+esc((x.ct.desc||'').slice(0,44));}).join('<br>')+
+      (g.kayitlar.length>2?'<br>+'+(g.kayitlar.length-2)+' kayıt daha':'')+'</div></td>'+
+    '<td class="num"><b>'+g.kayitlar.length+'</b></td>'+
+    '<td class="num">'+fmt0(g.tutar)+'</td>'+
+    '<td>'+katSelect(gid,'gider',sec,g.ad)+'</td>'+
+    '<td class="rowact"><button class="btn sm dng" data-act="katEksikYaz" data-arg="'+esc(gid)+'" title="'+esc(g.ad)+' için eksik gider satırını oluştur">Gider kaydını oluştur</button></td></tr>';
+  }).join('')+'</tbody></table></div></div>';
+}
+
+/* data-actv degisim olayi window[f](deger, ELEMAN) ile cagirir — grup kimligi
+   elemanin data-arg'inda durur. */
+function katSec(v,el){
+ var gid=(el&&el.getAttribute)?el.getAttribute('data-arg'):null;
+ if(!gid)return;
+ if(v)katSecim[katKey(gid)]=v; else delete katSecim[katKey(gid)];
+}
+
+/* v50 DENETİM: seçili değerin tek doğru kaynağı EKRANDAKİ <select>'tir. Cari kartında
+   varsayılan kategori tanımlıysa liste o değerle ön-seçili çiziliyor ama "change" olayı
+   hiç tetiklenmediği için katSecim boş kalıyordu → "Uygula" düğmesi sessizce
+   "önce kategori seçin" deyip hiçbir şey yapmıyordu. */
+function katSecilen(gid){
+ try{
+  var el=document.querySelector('#main select[data-actv="katSec"][data-arg="'+String(gid).replace(/"/g,'\\"')+'"]');
+  if(el&&el.value)return el.value;
+ }catch(e){}
+ return katSecim[katKey(gid)]||'';
+}
+
+/* Secilen kategori gecerli mi — sistem kalemi / genel kalem / yanlis yon olamaz */
+function katGecerli(kat,yon){
+ if(!kat){toast('Önce bu satırda bir kategori seçin');return false;}
+ if(KAT_SISTEM[kat]){toast('⛔ “'+kat+'” bir SİSTEM kategorisidir (grup içi aktarım) — gerçek gider/gelir buraya yazılamaz');return false;}
+ if(KAT_GENEL[kat]){toast('“'+kat+'” zaten genel bir kalem — düzeltme sayılmaz, detaylı bir kategori seçin');return false;}
+ if((S.cats[yon]||[]).indexOf(kat)<0){toast('⛔ “'+kat+'” '+(yon==='gelir'?'GELİR':'GİDER')+' kategorileri arasında değil');return false;}
+ return true;
+}
+
+/* ---------- uygulama: kategori degistir ---------- */
+function katUygula(gid){
+ if(yetkiYok('kayit.duzenle','Kayıt düzeltmek'))return;
+ var kat=katSecilen(gid);
+ var tum=katGrupKayit(gid,'genel');
+ if(!tum.length){toast('Düzeltilecek kayıt kalmadı');rKatDuzelt();return;}
+ var yon=katGrupYon({kayitlar:tum});
+ if(!katGecerli(kat,yon))return;
+ var hepsi=tum.filter(function(x){return (x.t.type==='gelir'?'gelir':'gider')===yon;});
+ var atlanan=tum.length-hepsi.length;
+ if(!hepsi.length){toast('Bu yönde düzeltilecek kayıt yok');return;}
+ var cari=tum[0].cari, ad=tum[0].cariAd;
+ var tut=hepsi.reduce(function(s,x){return s+Math.abs(+x.t.amount||0);},0);
+ uiConfirm(ad+' için '+hepsi.length+' '+yon+' kaydı "'+kat+'" kategorisine taşınacak.\n\n'+
+  'Toplam tutar: '+fmt0(tut)+'\n\n'+
+  (atlanan?atlanan+' kayıt diğer yönde olduğu için bu işlemde atlanacak (onlar için kategoriyi değiştirip tekrar uygulayın).\n\n':'')+
+  'Tutarlar ve tarihler DEĞİŞMEZ — yalnızca kâr/zarar raporunda hangi kaleme yazıldığı düzelir.\n'+
+  (cari&&can('tanim.duzenle')?'Bu kategori cari kartına varsayılan olarak da kaydedilecek.\n':'')+
+  '\nHer kaydın eski kategorisi değişim geçmişine yazılır; İşlem Kontrol Merkezi\'nden görebilir ve geri alabilirsiniz.',
+ function(){
+  var n=0;
+  ensureCat(yon,kat);
+  hepsi.forEach(function(x){
+   var t=x.t;
+   var orig=JSON.parse(JSON.stringify(t));
+   t.cat=kat;
+   try{stampUpdate(t,orig);}catch(e){}
+   n++;
+  });
+  /* Cari kartı bir TANIM kaydıdır — ayrı yetki ister. */
+  if(cari&&!cari.sys&&can('tanim.duzenle')){
+   var co=JSON.parse(JSON.stringify(cari));
+   if(yon==='gider')cari.defCatGider=kat; else cari.defCatGelir=kat;
+   try{stampUpdate(cari,co);}catch(e){}
+  }
+  try{logAudit('Toplu kategori düzeltmesi',ad+' · '+n+' kayıt → '+kat+' · '+fmt0(tut));}catch(e){}
+  delete katSecim[katKey(gid)];
+  save();
+  toast('✅ '+n+' kayıt "'+kat+'" kategorisine taşındı'+(cari&&can('tanim.duzenle')?' · cari kartına varsayılan olarak yazıldı':''));
+  rKatDuzelt();
+ },{title:'Kategori Düzeltme Onayı',yes:'Evet, '+hepsi.length+' Kaydı Düzelt'});
+}
+
+/* Bir grup kimligine ait guncel kayitlari getir (tekil satirlar dahil) */
+function katGrupKayit(gid,hangi){
+ var IX=katIndeks(CO);
+ var L=(hangi==='eksik')?katEksikGiderler(CO,IX):katGenelKayitlar(CO,IX);
+ var anahtar=(hangi==='eksik')?'ct':'t';
+ return L.filter(function(x){
+  if(x.cari&&x.cari.id)return x.cari.id===gid;
+  return ('_t'+(anahtar==='ct'?x.ct.id:x.t.id))===gid;
+ });
+}
+
+/* ---------- uygulama: eksik gider kaydini olustur ---------- */
+function katEksikYaz(gid){
+ /* Geçmişe kâr/zarar kaydı doğuran bir işlem — yalnızca "kayıt ekle" yetmez. */
+ if(yetkiYok('kayit.duzenle','Geçmişe eksik gider kaydı oluşturmak'))return;
+ var kat=katSecilen(gid);
+ if(!katGecerli(kat,'gider'))return;
+ var hepsi=katGrupKayit(gid,'eksik');
+ if(!hepsi.length){toast('Eksik kayıt kalmadı');rKatDuzelt();return;}
+ var cari=hepsi[0].cari, ad=hepsi[0].cariAd;
+ var tut=hepsi.reduce(function(s,x){return s+Math.abs(+x.ct.amount||0);},0);
+ uiConfirm(ad+' için '+hepsi.length+' EKSİK gider kaydı oluşturulacak.\n\n'+
+  'Toplam tutar: '+fmt0(tut)+'\nKategori: '+kat+'\n\n'+
+  'Bu ödemeler merkez tarafından yapılmıştı ama '+coName(CO)+' şirketinin gider defterine yazılmamıştı.\n\n'+
+  '⚠ ÖNEMLİ: Cari bakiyeniz ve merkez borcunuz DEĞİŞMEZ — yalnızca eksik olan gider satırı eklenir, '+
+  'böylece bu ödemeler kâr/zarar raporunda görünür.\n\n'+
+  'Yanlış olursa o satırı tek başına silebilirsiniz: merkez ödemesine dokunulmaz, kayıt yeniden bu listeye düşer.',
+ function(){
+  var n=0,grupId=nid();
+  ensureCat('gider',kat);
+  hepsi.forEach(function(x){
+   var ct=x.ct;
+   /* v50 DENETİM: bu kayıt merkez işleminin ASLİ bir bacağı DEĞİL, sonradan eklenmiş
+      tamamlayıcıdır. ic:true / icId verilseydi tek satırı silmek bütün merkez ödemesini
+      iki defterden birden uçururdu. katDuzeltme işareti del() içinde yukarı kaskadı keser. */
+   pushRec(S.txns,{id:nid(),co:CO,type:'gider',date:ct.date,amount:Math.abs(+ct.amount||0),accId:'',
+    src:'merkez',cat:kat,cariId:ct.cariId,cariTxnId:ct.id,
+    desc:'🏛 Merkezden ödendi — '+ad+(ct.desc?(' — '+String(ct.desc).replace(/^🏛 Merkezden ödendi\s*—?\s*/,'')):''),
+    katDuzeltme:grupId});
+   n++;
+  });
+  if(cari&&!cari.sys&&!cari.defCatGider&&can('tanim.duzenle')){
+   var co=JSON.parse(JSON.stringify(cari));
+   cari.defCatGider=kat;
+   try{stampUpdate(cari,co);}catch(e){}
+  }
+  try{logAudit('Eksik gider kaydı oluşturuldu',ad+' · '+n+' kayıt · '+kat+' · '+fmt0(tut));}catch(e){}
+  delete katSecim[katKey(gid)];
+  save();
+  toast('✅ '+n+' eksik gider kaydı oluşturuldu — '+coName(CO)+' gider raporunda artık görünecek');
+  rKatDuzelt();
+ },{danger:1,title:'Eksik Gider Kaydı Oluştur',yes:'Evet, '+hepsi.length+' Kayıt Oluştur'});
+}
+
+/* ---------- tum kayitlari listele ---------- */
+function katListeAc(){
+ var L=katGenelKayitlar(CO);
+ if(!L.length){toast('Listelenecek kayıt yok');return;}
+ uiInfo('🏷 Kategorisi Genel Kalmış Kayıtlar',
+  '<p class="tiny" style="margin-bottom:8px">'+L.length+' kayıt · toplam <b>'+
+   fmt0(L.reduce(function(s,x){return s+Math.abs(+x.t.amount||0);},0))+'</b></p>'+
+  '<div style="overflow:auto;max-height:56vh"><table><thead><tr><th>Tarih</th><th>Cari</th><th>Açıklama</th><th>Kategori</th><th class="num">Tutar</th></tr></thead><tbody>'+
+  L.slice(0,300).map(function(x){
+   return '<tr><td class="tiny">'+dTR(x.t.date)+'</td><td>'+esc(x.cariAd)+'</td>'+
+    '<td class="tiny">'+esc((x.t.desc||'').slice(0,60))+'</td>'+
+    '<td><span class="chip w">'+esc(x.t.cat||'(boş)')+'</span></td>'+
+    '<td class="num" style="color:'+(x.t.type==='gelir'?'var(--pos)':'var(--neg)')+'">'+fmt0(x.t.amount)+'</td></tr>';
+  }).join('')+'</tbody></table></div>'+
+  (L.length>300?'<p class="tiny">İlk 300 kayıt gösteriliyor.</p>':''));
+}
+
+/* Raporlar / Cari ekranlarinda uyari rozeti — kullanici bu ekranin varligini bilsin.
+   v50 DENETİM (başarım): rozet yalnızca SAYI gösteriyor; tam liste kurmak yerine
+   sayan hafif bir tarama yapılır ve sonuç save() ile geçersizleşen bir önbellekte tutulur. */
+var _katRozetCache={};
+function katSayac(co){
+ var IX=katIndeks(co),g=0,e=0,txByIc={},txByCt={};
+ S.txns.forEach(function(t){
+  if(t.co!==co||t.deletedAt)return;
+  if(t.icId)txByIc[t.icId]=1;
+  if(t.cariTxnId)txByCt[t.cariTxnId]=1;
+  if(t.type==='virman'||t.xfer)return;
+  if(!t.cariId&&!t.cariTxnId)return;
+  if(!KAT_GENEL[t.cat||''])return;
+  var c=IX.cari[t.cariId];
+  if(!c&&t.cariTxnId){var ct=IX.cariTxn[t.cariTxnId];if(ct)c=IX.cari[ct.cariId];}
+  if(c&&c.sys)return;
+  g++;
+ });
+ S.cariTxns.forEach(function(ct){
+  if(ct.co!==co||ct.deletedAt||!ct.mrk||ct.type!=='borc')return;
+  if(ct.icId&&txByIc[ct.icId])return;
+  if(txByCt[ct.id])return;
+  var c=IX.cari[ct.cariId];
+  if(c&&c.sys)return;
+  e++;
+ });
+ return {g:g,e:e};
+}
+function katRozetTazele(){_katRozetCache={};}
+function katUyariRozeti(){
+ try{
+  if(CO==='grup'||CO==='merkez')return '';
+  if(!can('kayit.duzenle'))return '';
+  var k=CO+'|'+(S.txns.length)+'|'+(S.cariTxns.length);
+  var r=_katRozetCache[k];
+  if(!r){r=katSayac(CO);_katRozetCache={};_katRozetCache[k]=r;}
+  if(!r.g&&!r.e)return '';
+  return '<div class="card" style="border-left:4px solid var(--warn);margin-bottom:12px;padding:10px 14px">'+
+   '<p class="tiny" style="margin:0">⚠ <b>Gider raporunuz eksik olabilir:</b> '+
+   (r.g?r.g+' cari hareketinin kategorisi genel kalmış':'')+(r.g&&r.e?' · ':'')+
+   (r.e?r.e+' merkez ödemesi gider defterine yazılmamış':'')+'. '+
+   '<button class="btn sm" data-act="go" data-arg="katduzelt">🏷 Kategori Düzeltme Merkezi\'ni aç</button></p></div>';
+ }catch(err){return '';}
 }
