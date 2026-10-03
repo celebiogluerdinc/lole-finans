@@ -1073,6 +1073,145 @@ function cardDebt(card){
  for(const t of S.cardTxns) if(t.cardId===card.id&&!t.deletedAt) b+= t.type==='harcama'? +t.amount : -t.amount;
  return b;
 }
+/* ==================== v51: KART TAKSİT MUHASEBESİ ====================
+   SORUN: 6 taksitli 360.000 ₺'lik bir harcama kart ekstresinde tek satır 360.000 ₺
+   olarak duruyordu. Oysa banka o ayın ekstresine yalnızca 60.000 ₺ yazar; kalan 5
+   taksit sonraki ayların ekstrelerine düşer. Kartın TOPLAM borcu (limit kullanımı)
+   gerçekten 360.000 ₺'dir — değişen şey AYLIK ekstre borcu.
+   Bu yüzden iki ayrı kavram var ve ekranlarda ayrı ayrı gösterilir:
+     • cardDebt(c)             → toplam kalan borç / limit kullanımı
+     • kartDonemBorcu(id,f,t)  → o dönemin ekstresine düşen tutar
+   Taksit tutarları, gider defterine yazılan taksitlerle BİREBİR aynı kurala göre
+   bölünür (kuruş artığı son taksite biner) — iki yer arasında kuruş farkı olmasın. */
+function kartTaksitSayisi(v){
+ /* v51 DENETİM: bozuk yedekten gelen `taksit:Infinity` sonsuz döngüye sokup sekmeyi
+    öldürüyordu; 1.000.000 gibi bir değer de her çizimde milyonluk dizi üretiyordu.
+    Kesirli değer (6.5) ise plan ile gider defterini ayırıyordu — ikisi de aynı
+    normalleştirmeyi kullanır. */
+ var n=Math.round(+v||1);
+ if(!isFinite(n)||n<1)n=1;
+ if(n>600)n=600;        /* 50 yıl — gerçek hayatta üst sınır */
+ return n;
+}
+function kartTaksitPlani(t){
+ var n=kartTaksitSayisi(t.taksit);
+ var top=Math.round((+t.amount||0)*100)/100;
+ if(n===1)return [{date:t.date,amount:top,no:'1/1'}];
+ var per=Math.round((top/n)*100)/100,acc=0,out=[];
+ for(var i=0;i<n;i++){
+  var part=(i===n-1)?Math.round((top-acc)*100)/100:per;
+  acc=Math.round((acc+per)*100)/100;
+  out.push({date:addMonthsClamped(t.date,i),amount:part,no:(i+1)+'/'+n});
+ }
+ return out;
+}
+/* Bir hesap kesim döneminde kartın EKSTRE BORCU.
+   v51 DENETİM: ilk sürüm yalnızca (dönem harcaması − dönem ödemesi) hesaplıyordu.
+   Gerçek ekstre borcu = DEVİR (önceki dönemden kalan) + dönem harcaması − dönem
+   ödemesi. Devir terimi olmadan, dönem içinde yapılan büyük bir ödeme sonucu
+   EKSİ bir "ekstre borcu" çıkıyor ve ekranda yeşil (iyi haber) görünüyordu —
+   kullanıcı "bu ay karta borcum yok" diye okuyabilirdi. */
+function kartDonemBorcu(cardId,from,to){
+ var devir=0,harc=0,ode=0,kalem=[];
+ S.cardTxns.forEach(function(t){
+  if(t.cardId!==cardId||t.deletedAt)return;
+  if(t.type!=='harcama'){
+   if(t.date<from)devir-=+t.amount||0;
+   else if(t.date<=to)ode+=+t.amount||0;
+   return;
+  }
+  kartTaksitPlani(t).forEach(function(p){
+   if(p.date<from)devir+=p.amount;
+   else if(p.date<=to){harc+=p.amount;kalem.push({t:t,p:p});}
+  });
+ });
+ devir=Math.round(devir*100)/100;harc=Math.round(harc*100)/100;ode=Math.round(ode*100)/100;
+ return {devir:devir,harcama:harc,odeme:ode,
+  net:Math.round((devir+harc-ode)*100)/100,          /* ekstrede ödenecek tutar */
+  donemNet:Math.round((harc-ode)*100)/100,
+  kalem:kalem};
+}
+/* Kesimi GEÇMİŞ (yani bankanın fatura ettiği) son dönemin borcu — son ödeme günü
+   bu borç için geçerlidir. Hatırlatıcı ve merkez ödeme formu bunu kullanır. */
+function kartKesilmisEkstre(c){
+ var bugun=todayISO();
+ var sr=cardStatementRange(c,bugun);
+ /* içinde bulunduğumuz dönem henüz KESİLMEDİ — bir önceki döneme bakılır */
+ var oncekiRef=addDays(sr.from,-1);
+ var ps=cardStatementRange(c,oncekiRef);
+ var d=kartDonemBorcu(c.id,ps.from,ps.to);
+ return {from:ps.from,to:ps.to,borc:Math.max(0,d.net),ham:d.net,
+  due:nextDueAfter(+c.dueDay,ps.to)};
+}
+/* ŞİMDİ ÖDENEBİLİR borç: toplam borçtan, vadesi henüz GELMEMİŞ taksitler düşülür.
+   v51 DENETİM: merkez kart ödeme formu tutarı TOPLAM borçla dolduruyordu; 6 taksitli
+   bir harcamada bu, faturalanmamış 5 taksidi peşin kapatmak demekti. Burası
+   "bankanın bugüne kadar istediği" kısmı verir — taksitli harcamada ilk taksit,
+   taksitsiz harcamada tutarın tamamı. */
+function kartOdenebilir(c){
+ var d=cardDebt(c)-kartKalanTaksit(c.id,todayISO()).tutar;
+ return Math.round(Math.max(0,d)*100)/100;
+}
+/* Verilen kesim tarihinden SONRAKİ ilk son-ödeme günü */
+function nextDueAfter(day,kesim){
+ var d=new Date(kesim),y=d.getFullYear(),m=d.getMonth()+1;
+ var v=clampDay(y,m,day);
+ if(v<=kesim){m++;if(m>12){m=1;y++;}v=clampDay(y,m,day);}
+ return v;
+}
+/* Verilen tarihten SONRAKİ dönemlere düşecek taksitler.
+   v51 DENETİM: `ref` olarak bugün kullanılınca, içinde bulunulan dönemin taksidi
+   hem "Bu Dönemin Ekstresi" hem "Gelecek Taksitler" kutusunda sayılıyordu.
+   Çağıranlar artık DÖNEM SONUNU geçiyor. */
+function kartKalanTaksit(cardId,ref){
+ ref=ref||todayISO();
+ var kalan=0,n=0;
+ S.cardTxns.forEach(function(t){
+  if(t.cardId!==cardId||t.deletedAt||t.type!=='harcama'||(+t.taksit||1)<2)return;
+  kartTaksitPlani(t).forEach(function(p){ if(p.date>ref){kalan+=p.amount;n++;} });
+ });
+ return {tutar:Math.round(kalan*100)/100,adet:n};
+}
+/* Bir harcama satırının taksit özeti — ekstre satırının altında tek satır açıklama */
+/* v51: KART BORCU EKSİYE DÜŞMÜŞSE AÇIKÇA SÖYLE.
+   Kullanıcı şikâyeti: "limit 250.000 ama kullanılabilir limit daha fazla gözüküyor."
+   Sebep: kart ekstresi içe aktarılırken işaretsiz (artı) harcama satırları "giriş"
+   sayılıp ÖDEME olarak yazılıyordu; her harcama kart borcunu DÜŞÜRÜYOR, borç eksiye
+   geçiyor ve "kullanılabilir = limit − borç" limitin üstüne çıkıyordu. İçe aktarma
+   yönü aşağıda düzeltildi; bu uyarı ise eski yüklemelerden kalan bozuk veriyi
+   kullanıcıya görünür kılar ve geri alma yoluna işaret eder. */
+/* Kredi Kartları ekranının tepesinde toplu uyarı */
+function kartNegatifUyariToplu(list){
+ var bad=(list||[]).filter(function(c){return cardDebt(c)<-0.005;});
+ if(!bad.length)return '';
+ return bad.map(function(c){return kartNegatifUyari(c);}).join('');
+}
+function kartNegatifUyari(c){
+ var b=cardDebt(c);
+ if(b>=-0.005)return '';
+ return '<div class="card" style="border-left:4px solid var(--warn);padding:10px 14px;margin-bottom:12px">'+
+  '<p class="tiny" style="margin:0">⚠ <b>'+esc(c.name)+(c.active==='0'?' (⏸ pasif)':'')+' kartında '+fmt0(-b)+' fazla ödeme görünüyor.</b> '+
+  'Bu yüzden “Kullanılabilir Limit” gerçek limitin ('+fmt0(c.limit||0)+') üzerinde çıkıyor. '+
+  'Çoğu zaman sebebi, kart ekstresi yüklenirken harcama satırlarının <b>ödeme</b> olarak okunmasıdır. '+
+  'Aşağıdaki ekstre listesinde <b>📷 ekstre</b> etiketli “Ödeme” satırlarını kontrol edin — '+
+  'yanlışsa Kredi Kartları ekranındaki <b>“Son ekstre yüklemeleri”</b> bölümünden o yüklemeyi tek tuşla geri alabilirsiniz.'+
+  '</p></div>';
+}
+function kartTaksitNotu(t,from,to,plan){
+ var n=kartTaksitSayisi(t.taksit);
+ if(n<2)return '';
+ plan=plan||kartTaksitPlani(t);
+ var bugun=todayISO();
+ var buDonem=plan.filter(function(p){return from&&p.date>=from&&p.date<=to;})[0];
+ var kalan=plan.filter(function(p){return p.date>bugun;});
+ var kalanTut=kalan.reduce(function(a,p){return a+p.amount;},0);
+ return '<div class="tiny" style="color:var(--ink2);margin-top:3px">'+
+  '📆 '+n+' taksit · aylık <b>'+fmt(plan[0].amount)+'</b>'+
+  (plan[plan.length-1].amount!==plan[0].amount?' (son taksit '+fmt(plan[plan.length-1].amount)+')':'')+
+  (buDonem?' · bu dönem <b>'+fmt(buDonem.amount)+'</b> ('+buDonem.no+')':'')+
+  (kalan.length?' · kalan '+kalan.length+' taksit <b>'+fmt(kalanTut)+'</b> (son: '+dTR(plan[plan.length-1].date)+')':' · tamamlandı')+
+  '</div>';
+}
 function nextDue(day){
  const t=new Date();let y=t.getFullYear(),m=t.getMonth()+1;
  let d=clampDay(y,m,day);
@@ -1125,7 +1264,22 @@ function pctChange(cur,prev){ if(!prev)return cur?100:0; return (cur-prev)/Math.
 /* ---------- HATIRLATICILAR ---------- */
 function reminders(co){
  const out=[];
- for(const c of byCo(S.cards,co)){const debt=cardDebt(c);if(debt<=0)continue;const d=nextDue(+c.dueDay);const df=daysDiff(d);if(df<=10)out.push({d,df,pg:'card',t:'Kredi kartı: '+c.name+' son ödeme',a:debt});}
+ /* v51 DENETİM (KRİTİK): hatırlatıcı son ödeme gününde kartın TOPLAM borcunu
+    istiyordu. 6 taksitli 360.000 ₺'lik bir harcamada bankanın o ay istediği 60.000 ₺
+    iken ekranda 370.000 ₺ yazıyordu — kullanıcı nakit planını bu rakama göre yapıyor.
+    Artık KESİLMİŞ ekstrenin borcu gösterilir, toplam borç alt bilgi olarak geçer. */
+ for(const c of byCo(S.cards,co)){
+  const debt=cardDebt(c); if(debt<=0)continue;
+  const ek=kartKesilmisEkstre(c);
+  const d=ek.borc>0?ek.due:nextDue(+c.dueDay);
+  const df=daysDiff(d);
+  if(df>10)continue;
+  const tutar=ek.borc>0?ek.borc:0;
+  if(!(tutar>0))continue;                      /* kesilmiş ekstre borcu yoksa hatırlatma yok */
+  const fark=Math.round((debt-tutar)*100)/100;
+  out.push({d,df,pg:'card',a:tutar,
+   t:'Kredi kartı: '+c.name+' ekstre borcu'+(fark>0.005?' (toplam kalan borç '+fmt0(debt)+')':'')});
+ }
  const per=monthISO();
  for(const f of byCo(S.fixed,co)){
   const paid=S.fixedLogs.some(l=>l.fixedId===f.id&&l.period===per&&!l.deletedAt);
@@ -2120,6 +2274,7 @@ function rCard(){
  const totalLimit=list.reduce((s,c)=>s+ +(c.limit||0),0);
  document.getElementById('main').innerHTML= topbar('Kredi Kartları',
   `<button class="btn gh" data-act="ekstreYukle" data-arg="kart" title="Kredi kartı ekstresini fotoğraf, PDF ya da Excel olarak yükleyin — harcamalar otomatik okunsun">📷 Ekstre Yükle</button><button class="btn" data-act="cardForm">＋ Kart Ekle</button>`)+
+ kartNegatifUyariToplu(byCo(S.cards,CO))+   /* v51: pasif kartlar da uyarıya girer */
  (list.length?`<div class="grid g3" style="margin-bottom:16px">
    <div class="kpi n" data-act="cardBorcTgl" style="cursor:pointer${cardBorcFiltre?';outline:2px solid var(--acc)':''}" title="Yalnızca borcu olan kartları göster"><div class="l">Toplam Kart Borcu ↗${cardBorcFiltre?' ✓':''}</div><div class="v">${fmt0(totalDebt)}</div><div class="s">${list.filter(c=>cardDebt(c)>0.005).length} kartta borç · tıklayın</div></div>
    <div class="kpi"><div class="l">Toplam Limit</div><div class="v">${fmt0(totalLimit)}</div><div class="s">${list.length} aktif kart</div></div>
@@ -2129,8 +2284,12 @@ function rCard(){
   ${totalDebt>0?`<div class="card"><h2>Borç Dağılımı (kart bazında)</h2>${chartDonut(list.map(c=>({label:c.name,value:Math.max(0,cardDebt(c)),color:hashColor(c.bank||c.name),act:'cardDetail',arg:c.id})),'BORÇ ₺')}</div>`:''}${cardInstCard(list)}`:'')+
  (panelView.card==='liste'?`<div class="card"><h2>Kart Listesi <span class="tiny">${_kartGoster.length} kart${cardBorcFiltre?' (yalnız borçlular)':''}</span></h2>${cardListeTablo(_kartGoster)}</div>`
   :_kartGoster.length? `<div class="grid g2">`+_kartGoster.map(c=>{
-   const debt=cardDebt(c);const avail=+c.limit-debt;const due=nextDue(+c.dueDay);const df=daysDiff(due);
-   const pct=Math.min(100,Math.max(0,debt/(+c.limit||1)*100));
+   const debt=cardDebt(c);const _lim=+c.limit||0;
+   /* v51 DENETİM: borç eksiye düşmüşse "kullanılabilir" gerçek limitin ÜSTÜNE çıkıyor
+      ve kullanıcı olmayan bir limite güveniyordu. Limitle sınırlanır, fazlalık ayrı yazılır. */
+   const avail=Math.min(_lim,_lim-debt);const _fazla=debt<-0.005?-debt:0;
+   const due=nextDue(+c.dueDay);const df=daysDiff(due);
+   const pct=Math.min(100,Math.max(0,debt/(_lim||1)*100));
    const col=hashColor(c.bank||c.name);
    return `<div class="card accCard" data-act="cardDetail" data-arg="${c.id}" style="--ac:${col};cursor:pointer" title="Kart detay sayfasını aç">
     <div class="accHead"><span class="avat" style="background:${col}">${esc((c.bank||c.name).charAt(0).toUpperCase())}</span>
@@ -2138,7 +2297,7 @@ function rCard(){
      ${debt>0?`<span class="chip ${df<=3?'n':'w'}" style="margin-left:auto">${remLbl(df)}</span>`:'<span class="chip p" style="margin-left:auto">Borç yok</span>'}</div>
     <div class="grid g2" style="margin:12px 0 10px">
      <div><div class="tiny">Güncel Borç</div><b style="font-size:20px;color:${debt>0?'var(--neg)':'var(--pos)'}">${fmt(debt)}</b></div>
-     <div><div class="tiny">Kullanılabilir</div><b style="font-size:20px">${fmt(avail)}</b></div>
+     <div><div class="tiny">Kullanılabilir</div><b style="font-size:20px">${fmt(avail)}</b>${_fazla?'<div class="tiny" style="color:var(--warn)">⚠ ayrıca '+fmt0(_fazla)+' fazla ödeme</div>':''}</div>
     </div>
     <div style="background:var(--bg);border-radius:99px;height:9px;overflow:hidden;margin-bottom:8px"><div style="width:${pct}%;height:100%;background:${pct>80?'var(--neg)':col};transition:width .3s"></div></div>
     <div class="mut">Limit ${fmt0(c.limit)} · doluluk %${pct.toFixed(0)} · kesim: ayın ${c.cutDay}'i · son ödeme: ayın ${c.dueDay}'i${debt>0?' ('+dTR(due)+')':''}</div>
@@ -2188,7 +2347,7 @@ function cardTxnForm(cardId,type){
    S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:o.cariId,type:'alacak',amount:+o.amount,date:o.date,cardId:cardId,cardTxnId:cdid,desc:'Kart harcaması (fatura): '+(o.desc||'')}));
    S.cariTxns.push(stampCreate({id:nid(),co:CO,cariId:o.cariId,type:'borc',amount:+o.amount,date:o.date,cardId:cardId,cardTxnId:cdid,desc:'Kredi kartıyla ödendi: '+(o.desc||'')}));
   }
-  var _cdRec={id:cdid,co:CO,cardId,type,...o,amount:+o.amount,taksit:+o.taksit||1};
+  var _cdRec={id:cdid,co:CO,cardId,type,...o,amount:Math.round((+o.amount||0)*100)/100,taksit:kartTaksitSayisi(o.taksit)};
   if(ctid)_cdRec.cariTxnId=ctid;
   S.cardTxns.push(stampCreate(_cdRec));
   const c=S.cards.find(x=>x.id===cardId)||{};
@@ -2196,7 +2355,7 @@ function cardTxnForm(cardId,type){
    S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:'Banka & Komisyon',accId:o.accId,cardTxnId:cdid,desc:'Kredi kartı ödemesi: '+(c.name||''),xfer:true}));
   }
   if(type==='harcama'){
-   var N=+o.taksit||1;
+   var N=kartTaksitSayisi(o.taksit);   /* v51: plan ile defter AYNI normalleştirmeyi kullanır */
    if(N<=1){
     S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+o.amount,cat:o.cat,accId:'',cardTxnId:cdid,vat:o.vat||'',desc:(o.desc||'')+' (kredi kartı)',src:'card',cariId:o.cariId||''}));
    }else{
@@ -2247,15 +2406,37 @@ function cardEkstre(id){
  const c=S.cards.find(x=>x.id===id);if(!c)return;
  const list=S.cardTxns.filter(t=>t.cardId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
  const _sr=cardStatementRange(c); // içinde bulunulan hesap kesim dönemi
- const _don=list.filter(t=>t.date>=_sr.from&&t.date<=_sr.to);
- const _donBorc=_don.reduce((s,t)=>s+(t.type==='harcama'?+t.amount:-t.amount),0);
+ /* v51: dönem hareketi artık TAKSİTE GÖRE hesaplanır. Eskiden 6 taksitli bir
+    harcamanın TAMAMI alındığı ayın dönem borcuna yazılıyordu. */
+ const _db=kartDonemBorcu(id,_sr.from,_sr.to);
+ const _donBorc=_db.net;
+ /* v51 DENETİM: referans BUGÜN değil DÖNEM SONU — yoksa içinde bulunulan dönemin
+    taksidi hem "Bu Dönemin Ekstresi" hem "Gelecek Taksitler" kutusunda sayılıyordu. */
+ const _kt=kartKalanTaksit(id,_sr.to);
+ const _toplam=cardDebt(c);
+ const _sonOde=nextDueAfter(+c.dueDay,_sr.to);   /* bu dönemin son ödeme günü */
+ /* v51 DENETİM (başarım): 20.000 hareketli bir kartta ekstre 17 saniye donuyordu —
+    satır sınırı yoktu ve her satır için taksit planı İKİ kez üretiliyordu. */
+ const _LIM=200;
+ const _gos=list.slice(0,_LIM);
+ const _plan={};
+ _gos.forEach(function(t){ if(t.type==='harcama'&&kartTaksitSayisi(t.taksit)>1)_plan[t.id]=kartTaksitPlani(t); });
  var _kbx=document.getElementById('cardEkstreBox'); if(!_kbx)return;
  _kbx.innerHTML=
   `<div class="card"><h2>Kart Ekstresi — ${esc(c.name)} <button class="btn sm gh" data-act="printSection" data-arg="cardEkstreBox~Kredi Kartı Ekstresi — ${_pArg(c.name)}~Güncel borç: ${fmt0(cardDebt(c))}" title="Yalnızca bu ekstreyi yazdırır — sayfanın tamamını değil">🖨 Ekstreyi Yazdır</button></h2>
-   <div class="mut" style="margin-bottom:8px">📆 Güncel dönem (kesim: ayın ${c.cutDay}'i): <b>${dTR(_sr.from)} — ${dTR(_sr.to)}</b> · dönem hareketi <b>${fmt(_donBorc)}</b> (${_don.length} işlem) · son ödeme: <b>${dTR(nextDue(+c.dueDay))}</b></div>
+   <div class="mut" style="margin-bottom:8px">📆 Güncel dönem (kesim: ayın ${c.cutDay}'i): <b>${dTR(_sr.from)} — ${dTR(_sr.to)}</b> · bu dönemin son ödemesi: <b>${dTR(_sonOde)}</b></div>
+   <div class="grid g3" style="margin-bottom:10px">
+    <div class="kpi ${_db.net>0.005?'n':'p'}"><div class="l">Bu Dönemin Ekstre Borcu</div><div class="v">${fmt0(_db.net)}</div><div class="s">${dTR(_sonOde)} tarihinde ödenecek</div></div>
+    <div class="kpi"><div class="l">Toplam Kalan Borç</div><div class="v">${fmt0(_toplam)}</div><div class="s">limit kullanımı · ${fmt0(c.limit||0)} limit</div></div>
+    <div class="kpi"><div class="l">Sonraki Dönemlere Düşecek</div><div class="v">${fmt0(_kt.tutar)}</div><div class="s">${_kt.adet} taksit · bu ekstreye girmedi</div></div>
+   </div>
+   <div class="mut" style="margin-bottom:10px;font-size:12px">Ekstre borcu nasıl oluştu: devreden <b>${fmt0(_db.devir)}</b> + bu dönem harcaması <b>${fmt0(_db.harcama)}</b> (${_db.kalem.length} kalem) − bu dönem ödemesi <b>${fmt0(_db.odeme)}</b> = <b>${fmt0(_db.net)}</b></div>
+   ${_kt.adet?`<p class="tiny" style="margin:-2px 0 10px">ℹ Taksitli harcamanın <b>tamamı</b> kartın borcuna ve limit kullanımına ilk günden yazılır; <b>aylık ekstreye</b> ise yalnızca o ayın taksidi düşer. Aşağıdaki satırlarda her harcamanın taksit planı yazılı.</p>`:''}
+   ${list.some(t=>t.ekstre)?`<p class="tiny" style="margin:-2px 0 10px;color:var(--warn)">⚠ Bu kartın bazı hareketleri <b>📷 ekstre yüklemesinden</b> geliyor. Banka ekstresi taksitli bir harcamayı <b>o ayın taksit tutarıyla</b> yazar; bu yüzden içe aktarılan satırlar taksit bilgisi taşımaz ve “Toplam Kalan Borç” yalnızca faturalanmış taksitleri içerir — gerçek limit kullanımınız daha yüksek olabilir. Taksitli büyük harcamaları <b>＋ Harcama</b> ile taksit sayısını girerek eklemeniz daha doğru sonuç verir.</p>`:''}
    ${list.length?'<table><thead><tr><th>Tarih</th><th>İşlem</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+
-    list.map(t=>`<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='odeme'?'p':'n'}">${t.type==='odeme'?'Ödeme':'Harcama'}</span> ${esc(t.desc||t.cat||'')}${(+t.taksit||1)>1?' <span class="chip w">'+t.taksit+' taksit</span>':''}${t.vat?' <span class="chip">KDV %'+esc(t.vat)+'</span>':''}${(typeof baglantiCipleri==='function')?('<div class="tiny" style="margin-top:3px">'+baglantiCipleri({cariId:t.cariId,staffTxnId:t.staffTxnId,stokTxnId:t.stokTxnId,assetId:t.assetId,icId:t.icId})+'</div>'):''}</td><td class="num" style="color:${t.type==='odeme'?'var(--pos)':'var(--neg)'}">${t.type==='odeme'?'-':''}${fmt(t.amount)}</td>
-    <td class="rowact"><button data-act="del" data-arg="cardT~${t.id}">🗑</button></td></tr>`).join('')+'</tbody></table>'
+    _gos.map(t=>`<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='odeme'?'p':'n'}">${t.type==='odeme'?'Ödeme':'Harcama'}</span> ${esc(t.desc||t.cat||'')}${(+t.taksit||1)>1?' <span class="chip w">'+t.taksit+' taksit</span>':''}${t.vat?' <span class="chip">KDV %'+esc(t.vat)+'</span>':''}${(typeof baglantiCipleri==='function')?('<div class="tiny" style="margin-top:3px">'+baglantiCipleri({cariId:t.cariId,staffTxnId:t.staffTxnId,stokTxnId:t.stokTxnId,assetId:t.assetId,icId:t.icId})+'</div>'):''}${_plan[t.id]?kartTaksitNotu(t,_sr.from,_sr.to,_plan[t.id]):''}</td><td class="num" style="color:${t.type==='odeme'?'var(--pos)':'var(--neg)'}">${t.type==='odeme'?'-':''}${fmt(t.amount)}${_plan[t.id]?'<div class="tiny" style="font-weight:400;color:var(--ink2)">aylık '+fmt(_plan[t.id][0].amount)+'</div>':''}</td>
+    <td class="rowact"><button data-act="del" data-arg="cardT~${t.id}">🗑</button></td></tr>`).join('')+'</tbody></table>'+
+    (list.length>_LIM?'<p class="tiny" style="margin-top:6px">Son '+_LIM+' hareket gösteriliyor ('+list.length+' hareketten). Tamamı için “🖨 Ekstreyi Yazdır” ya da Excel çıktısını kullanın.</p>':'')
     :'<div class="empty">Bu kartta hareket yok.</div>'}</div>`;
  try{document.getElementById('cardEkstreBox').scrollIntoView({behavior:'smooth'});}catch(e){}
 }
@@ -5718,7 +5899,20 @@ function cashForecast(co,days){
   var future=S.txns.filter(function(t){return !t.deletedAt&&(t.src==='card'||t.src==='merkez-kart')&&t.taksitNo&&t.date>start&&t.cardTxnId&&myCt[t.cardTxnId];}); /* v41: merkez kartıyla açılan taksitler şirket defterinde durduğu için merkezin projeksiyonundan düşüyordu — kart borcunun tamamı bu ayın ödeme gününe biniyordu */
   var futSum=future.reduce(function(s,t){return s+ +t.amount;},0);
   var nowDue=Math.max(0,debt-futSum); // negatifse 0
-  if(nowDue>0)put(nextDue(+c.dueDay),0,nowDue,'Kredi kartı: '+c.name);
+  /* v51 DENETİM: kalan borcun TAMAMI bu ayın son ödeme gününe biniyordu. Oysa hesap
+     kesiminden SONRA yapılan harcama bir sonraki ekstreye girer, bir ay sonra ödenir.
+     03.10'da (kesim ayın 1'i) yapılan 10.000 ₺'lik harcama 10.10'da değil 10.11'de
+     ödenir — projeksiyon bu ayı fazla, gelecek ayı eksik gösteriyordu. */
+  if(nowDue>0){
+   var _ekP=kartKesilmisEkstre(c);
+   var _kes=Math.min(nowDue,Math.max(0,_ekP.borc));     /* bankanın fatura ettiği kısım */
+   var _acik=Math.round((nowDue-_kes)*100)/100;         /* kesim sonrası harcamalar */
+   if(_kes>0)put(_ekP.due,0,_kes,'Kredi kartı ekstre borcu: '+c.name);
+   if(_acik>0){
+    var _sr=cardStatementRange(c);
+    put(nextDueAfter(+c.dueDay,_sr.to),0,_acik,'Kredi kartı (bu dönem): '+c.name);
+   }
+  }
   future.forEach(function(t){
    var y=+t.date.slice(0,4),m=+t.date.slice(5,7);
    var d=clampDay(y,m,+c.dueDay||1);
@@ -6097,9 +6291,14 @@ function demoV4Extras(){
   COMPANIES.forEach(function(c){
    var card=S.cards.find(function(x){return x.co===c.id;});
    if(card){
-    var _cdV4=nid();
-    S.cardTxns.push({id:_cdV4,co:c.id,cardId:card.id,type:'harcama',date:addDays(todayISO(),-20),amount:36000,cat:'Bakım & Onarım',desc:'Endüstriyel ekipman revizyonu (6 taksit)',taksit:6});
-    S.txns.push({id:nid(),co:c.id,type:'gider',date:addDays(todayISO(),-20),amount:36000,cat:'Bakım & Onarım',accId:'',cardTxnId:_cdV4,desc:'Endüstriyel ekipman revizyonu (6 taksit, kredi kartı)',src:'card'});
+    /* v51: örnek veri 6 taksitli bir harcama için TEK 36.000 ₺'lik gider yazıyordu —
+       kart ekstresi "aylık 6.000" derken gider defterinde tek kalem duruyordu.
+       Gerçek akışla aynı olsun diye taksitler ay ay yazılır. */
+    var _cdV4=nid(),_d4=addDays(todayISO(),-20);
+    S.cardTxns.push({id:_cdV4,co:c.id,cardId:card.id,type:'harcama',date:_d4,amount:36000,cat:'Bakım & Onarım',desc:'Endüstriyel ekipman revizyonu (6 taksit)',taksit:6});
+    kartTaksitPlani({date:_d4,amount:36000,taksit:6}).forEach(function(_p){
+     S.txns.push({id:nid(),co:c.id,type:'gider',date:_p.date,amount:_p.amount,cat:'Bakım & Onarım',accId:'',cardTxnId:_cdV4,taksitNo:_p.no,desc:'Endüstriyel ekipman revizyonu (taksit '+_p.no+', kredi kartı)',src:'card'});
+    });
    }
    var mus=S.cari.find(function(x){return x.co===c.id&&(x.type==='musteri'||x.type==='her2');});
    if(mus){
@@ -6810,6 +7009,31 @@ function integrityChecks(){
   S.fixedLogs.filter(function(l){ if(l.deletedAt||!canAccessCo(l.co)||!l.fixedId)return false; var x=S.fixed.find(function(k){return k.id===l.fixedId;}); return !x||!!x.deletedAt; }));
  A('Carisi silinmiş cari hareketi','Hareketin bağlı carisi silinmiş — hiçbir ekstrede görünmez ama bazı toplamlara girer.','cari',
   S.cariTxns.filter(function(t){ if(t.deletedAt||!canAccessCo(t.co)||!t.cariId)return false; var x=S.cari.find(function(k){return k.id===t.cariId;}); return !x||!!x.deletedAt; }));
+ /* v51: EKSTRE ekranı taksit planını kart hareketinden türetir; gider raporu ise
+    S.txns'teki taksit kayıtlarını okur. Bir taksit kaydının tarihi/tutarı elle
+    değiştirilir ya da grubun TAMAMI silinirse iki ekran sessizce çelişir:
+    kartta 360.000 borç durur, gider defterinde 0 ₺ gider görünür, kâr 360.000
+    fazla raporlanır. Bu bekçi o ayrışmayı yakalar. */
+ A('Taksit planı ile gider defteri ayrışmış','Taksitli kart harcamasının gider kayıtları, kartın taksit planıyla uyuşmuyor (adet, tarih ya da toplam farklı). Kart ekstresi ile kâr/zarar raporu farklı rakam gösterir — harcamayı silip yeniden girin.','card',
+  S.cardTxns.filter(function(t){
+   if(t.deletedAt||!canAccessCo(t.co)||t.type!=='harcama')return false;
+   if(t.ekstre)return false;                       /* ekstreden gelen satır gider kaydını zaten tek tutar yazar */
+   var n=kartTaksitSayisi(t.taksit); if(n<2)return false;
+   var L=S.txns.filter(function(x){return x.cardTxnId===t.id&&!x.deletedAt&&x.type==='gider';});
+   if(L.length!==n)return true;
+   var plan=kartTaksitPlani(t);
+   var pt=Math.round(plan.reduce(function(a,p){return a+p.amount;},0)*100);
+   var lt=Math.round(L.reduce(function(a,x){return a+(+x.amount||0);},0)*100);
+   if(pt!==lt)return true;
+   var pd=plan.map(function(p){return p.date;}).sort().join(',');
+   var ld=L.map(function(x){return x.date;}).sort().join(',');
+   return pd!==ld;
+  }));
+ /* v51: kart borcu eksiye düşerse "kullanılabilir limit" gerçek limitin üstüne
+    çıkar ve kullanıcı olmayan bir limite güvenir. Neredeyse her zaman ekstre
+    yüklemesinde yön yanlış okunmasından doğar. */
+ A('Kart borcu eksiye düşmüş','Kartta harcamadan çok ödeme görünüyor — “Kullanılabilir Limit” gerçek limitin üzerine çıkar. Genellikle kart ekstresi yüklenirken harcama satırlarının “ödeme” olarak okunmasından olur; Kredi Kartları ekranındaki “Son ekstre yüklemeleri” bölümünden ilgili yüklemeyi geri alın.','card',
+  S.cards.filter(function(c){ return !c.deletedAt&&canAccessCo(c.co)&&cardDebt(c)<-0.005; }));
  A('Kartı silinmiş kart hareketi','Kart hareketinin bağlı kartı silinmiş — kart borcu toplamları tutarsızlaşır.','card',
   S.cardTxns.filter(function(t){ if(t.deletedAt||!canAccessCo(t.co)||!t.cardId)return false; var x=S.cards.find(function(k){return k.id===t.cardId;}); return !x||!!x.deletedAt; }));
  A('Bağlı cari kaydı silinmiş gelir/gider','Gelir/gider kaydının cari eşi silinmiş — cari bakiyesi ile nakit hareketi ayrışmış.','tx',
@@ -6930,16 +7154,23 @@ function cariDetail(id){
 function cardDetail(id){
  const c=S.cards.find(x=>x.id===id&&!x.deletedAt);if(!c){toast('Kart bulunamadı');return;}
  PAGE='card';_navHi('card');
- const debt=cardDebt(c);const avail=+(c.limit||0)-debt;const due=nextDue(+c.dueDay);
- const mo=monthISO();
- const ayHarc=S.cardTxns.filter(t=>t.cardId===id&&!t.deletedAt&&t.type==='harcama'&&String(t.date||'').startsWith(mo)).reduce((s,t)=>s+ +t.amount,0);
+ const debt=cardDebt(c);const _lim=+(c.limit||0);
+ const avail=Math.min(_lim,_lim-debt);const _fazla=debt<-0.005?-debt:0;   /* v51 */
+ const due=nextDue(+c.dueDay);
+ /* v51: "Bu Ay Harcama" taksitin TAMAMINI sayıyordu — 6 taksitli 360.000 ₺'lik
+    harcama, alındığı ay 360.000 ₺ görünüyordu. Artık o döneme düşen taksit yazılır. */
+ const _sr0=cardStatementRange(c);
+ const _db0=kartDonemBorcu(id,_sr0.from,_sr0.to);
+ const _kt0=kartKalanTaksit(id,_sr0.to);   /* v51: dönem sonundan sonrakiler */
+ const _sonOde0=nextDueAfter(+c.dueDay,_sr0.to);
  document.getElementById('main').innerHTML= topbar('💳 '+esc(c.name),
   `<button class="btn gh" data-act="go" data-arg="card">← Kredi Kartları</button>`)+
  `<div class="grid g3" style="margin-bottom:16px">
-   <div class="kpi ${debt>0?'n':'p'}"><div class="l">Güncel Borç</div><div class="v">${fmt0(debt)}</div><div class="s">${debt>0?'Son ödeme: '+dTR(due):'Borç yok'}</div></div>
-   <div class="kpi"><div class="l">Kullanılabilir Limit</div><div class="v">${fmt0(avail)}</div><div class="s">Limit: ${fmt0(c.limit||0)}</div></div>
-   <div class="kpi"><div class="l">Bu Ay Harcama</div><div class="v">${fmt0(ayHarc)}</div></div>
+   <div class="kpi ${debt>0?'n':'p'}"><div class="l">Toplam Kalan Borç</div><div class="v">${fmt0(debt)}</div><div class="s">${debt>0?'Son ödeme: '+dTR(due):debt<-0.005?'⚠ kartta fazla ödeme görünüyor':'Borç yok'}</div></div>
+   <div class="kpi"><div class="l">Kullanılabilir Limit</div><div class="v">${fmt0(avail)}</div><div class="s">Limit: ${fmt0(c.limit||0)}${_fazla?' · ⚠ '+fmt0(_fazla)+' fazla ödeme':''}</div></div>
+   <div class="kpi"><div class="l">Bu Dönemin Ekstresi</div><div class="v">${fmt0(_db0.net)}</div><div class="s">${dTR(_sonOde0)} ödemesi${_kt0.adet?' · +'+_kt0.adet+' taksit ileride':''}</div></div>
   </div>
+  ${kartNegatifUyari(c)}
   <div class="card" style="margin-bottom:14px"><div class="cardBtns" style="margin:0">
    <button class="btn sm" data-act="cardTxnForm" data-arg="${c.id}~harcama">＋ Harcama</button>
    <button class="btn sm gh" data-act="cardTxnForm" data-arg="${c.id}~odeme">₺ Ödeme Yap</button>
@@ -7614,7 +7845,7 @@ function merkezOpts(co){ /* şirket içi formlarda "merkez öder" seçenekleri *
  byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).forEach(function(a){
   l.push(['merkez:'+a.id,'🏛 MERKEZ ÖDER — '+(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' — bakiye '+fmt0(accBalance(a))]);});
  byCo(S.cards,'merkez').filter(function(c){return c.active!=='0';}).forEach(function(c){
-  l.push(['merkez:card:'+c.id,'🏛 MERKEZ ÖDER — 💳 '+c.name+' — borç '+fmt0(Math.max(0,cardDebt(c)))]);});
+  l.push(['merkez:card:'+c.id,'🏛 MERKEZ ÖDER — 💳 '+c.name+' — kalan borç '+fmt0(Math.max(0,cardDebt(c)))+' / limit '+fmt0(+c.limit||0)]);});
  return l;
 }
 
@@ -7624,7 +7855,7 @@ function merkezOpts(co){ /* şirket içi formlarda "merkez öder" seçenekleri *
    döner: {icId, N}  (N = uygulanan taksit sayısı) */
 function merkezKayitYaz(coId,o){
  var icId=nid(),isCard=String(o.method).indexOf('card:')===0,cardId=isCard?String(o.method).slice(5):'';
- var amt=+o.amount,N=+o.taksit||1;
+ var amt=Math.round((+o.amount||0)*100)/100,N=kartTaksitSayisi(o.taksit);   /* v51 */
  if(N>1&&(!isCard||o.hedef!=='gider'))N=1;
  var cmc=coMerkezCari(coId),desc=o.desc||'';
  ensureCat('gider','Grup İçi');
@@ -7768,7 +7999,10 @@ function merkezOdeForm(coId,init){
   {row:[
    {name:'fixedId',label:'Sabit ödeme tanımı (yalnızca “Sabit ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(fixs.map(function(f){return [f.id,(FTYPE[f.type]||'')+' · '+f.name];}))},
    {name:'period',label:'Dönem (sabit ödeme / maaş için)',type:'month',def:monthISO()}]},
-  {name:'hedefCard',label:coName(coId)+' — borcu ödenecek kredi kartı',type:'select',opts:[['','— Seçin —']].concat(hedefCards.map(function(c){return [c.id,'💳 '+c.name+' (borç: '+fmt0(Math.max(0,cardDebt(c)))+')'];}))},
+  /* v51: etiket artık ekstre borcu ile toplam borcu AYIRIR — hangisinin ödendiği belli olsun */
+  {name:'hedefCard',label:coName(coId)+' — borcu ödenecek kredi kartı',type:'select',opts:[['','— Seçin —']].concat(hedefCards.map(function(c){
+   var _o=kartOdenebilir(c),_t=Math.max(0,cardDebt(c));
+   return [c.id,'💳 '+c.name+' (vadesi gelen: '+fmt0(_o)+(Math.abs(_t-_o)>0.005?' · toplam kalan '+fmt0(_t)+' (taksitler dahil)':'')+')'];}))},
   {name:'hedefAcc',label:coName(coId)+' — para hangi kasaya / bankaya girecek?',type:'select',opts:[['','— Seçin —']].concat(hedefAccs.map(function(a){return [a.id,(a.type==='kasa'?'💵 ':'🏦 ')+a.name+' (bakiye: '+fmt0(accBalance(a))+')'];}))},
   {name:'desc',label:'Açıklama',ph:'Fatura no / ödeme detayı...'}
  ],function(o){
@@ -8367,7 +8601,17 @@ function merkezOdeBind(coId){
   /* otomatik tutar */
   if(hedef==='sabit'){var fx=S.fixed.find(function(x){return x.id===fldVal('fixedId');});if(fx&&+fx.amount>0)fldAuto('amount',fx.amount);}
   if(hedef==='maas'&&fldVal('stype')==='maas'){var st=S.staff.find(function(x){return x.id===fldVal('staffId');});if(st&&+st.salary>0)fldAuto('amount',st.salary);}
-  if(hedef==='kart'&&fldVal('hedefCard')){var kc=S.cards.find(function(x){return x.id===fldVal('hedefCard');});if(kc){var b=Math.round(Math.max(0,cardDebt(kc))*100)/100;if(b>0)fldAuto('amount',b);}}
+  /* v51 DENETİM (KRİTİK): tutar alanı kartın TOPLAM borcuyla otomatik doluyordu.
+     6 taksitli bir harcamada bu, henüz faturalanmamış 5 taksidi peşin kapatmak
+     demektir — merkez kasasından gereksiz para çıkar. Artık KESİLMİŞ ekstrenin
+     borcu önerilir; kullanıcı isterse elle artırabilir. */
+  if(hedef==='kart'&&fldVal('hedefCard')){
+   var kc=S.cards.find(function(x){return x.id===fldVal('hedefCard');});
+   if(kc){
+    var b=kartOdenebilir(kc);
+    if(b>0)fldAuto('amount',b);
+   }
+  }
   /* önizleme */
   var amt=parseAmt(fldVal('amount'))||0,date=fldVal('date')||todayISO(),N=+fldVal('taksit')||1;
   if(!(hedef==='gider'&&isCard))N=1;
@@ -9572,7 +9816,7 @@ function cardListeTablo(list){
  var tb=0,tl=0;
  return '<div style="overflow-x:auto"><table><thead><tr><th>Kart</th><th class="hidem">Banka</th><th class="num">Borç</th><th class="num hidem">Limit</th><th class="num">Kalan Limit</th><th class="hidem">Doluluk</th><th>Son Ödeme</th><th class="rowact"></th></tr></thead><tbody>'+
  list.map(function(c){
-  var b=cardDebt(c),lim=+c.limit||0,kal=lim-b,pct=lim?Math.min(100,Math.max(0,b/lim*100)):0;
+  var b=cardDebt(c),lim=+c.limit||0,kal=Math.min(lim,lim-b),pct=lim?Math.min(100,Math.max(0,b/lim*100)):0;   /* v51 */
   var df=daysDiff(nextDue(+c.dueDay));
   tb+=Math.max(0,b);tl+=lim;
   return '<tr data-act="cardDetail" data-arg="'+c.id+'" style="cursor:pointer" title="Kart ekstresini aç">'+
@@ -10094,6 +10338,9 @@ function ekstreSutunTahmin(rows){
 
 /* Eşlemeye göre satırları üretir — YAPAY ZEKA KULLANILMAZ */
 function ekstreTablodanSatirlar(rows,esle,tur){
+ /* v51 DENETİM: `tur` parametresi tanımlıydı ama fonksiyon global EKSTRE.tur'u
+    okuyordu — imza yalan söylüyordu. Artık parametre verilirse o geçerli. */
+ var _kartT=(tur!==undefined&&tur!==null&&tur!=='')?(tur==='kart'):!!(typeof EKSTRE!=='undefined'&&EKSTRE&&EKSTRE.tur==='kart');
  var sut=esle.sut,bas=esle.satir;
  var out=[],atlanan=0,elenen=[];
  var SINIR=2000;   /* v49 DENETİM: satır sınırı yoktu; 50.000 satırlık dosya tarayıcıyı kilitliyordu */
@@ -10150,9 +10397,16 @@ function ekstreTablodanSatirlar(rows,esle,tur){
      else if(/^(b|d|borc|borç)$/i.test(hucre('yon')))yon='cikis';
      else if(/^(a|c|alacak)$/i.test(hucre('yon')))yon='giris';
     }
-    if(yon===null)yon=ay.eksi?'cikis':'giris';
+    /* v51 KRİTİK DÜZELTME: KREDİ KARTI ekstresinde işaret mantığı TERSTİR.
+       Banka hesabında işaretsiz/artı tutar "para girdi" demektir; kart ekstresinde
+       ise işaretsiz tutar bir HARCAMA'dır (borcu artırır), eksi tutar ödeme/iadedir.
+       Eskiden kart ekstresindeki her harcama "giriş" sayılıp ÖDEME olarak yazılıyor,
+       kart borcunu DÜŞÜRÜYORDU — borç eksiye geçiyor, kullanılabilir limit şişiyordu. */
+    if(yon===null)yon=_kartT?(ay.eksi?'giris':'cikis'):(ay.eksi?'cikis':'giris');
     if(!ay.eksi&&sut.yon===undefined&&isaretsiz)
-     uyari.push('Bu ekstrede yön işareti yok — satırın gelir mi gider mi olduğunu kontrol edin');
+     uyari.push(_kartT
+      ?'Bu ekstrede yön işareti yok — satırın harcama mı ödeme mi olduğunu kontrol edin'
+      :'Bu ekstrede yön işareti yok — satırın gelir mi gider mi olduğunu kontrol edin');
    }
   }
   if(!tutar){atlanan++;continue;}          /* boş / ara satır */
@@ -10167,7 +10421,15 @@ function ekstreTablodanSatirlar(rows,esle,tur){
 
   if(!tarih)uyari.push('Tarih okunamadı — elle girin');
   if(yon===null){ yon='cikis'; uyari.push('Yön belirlenemedi — kontrol edin'); }
-  if(EKSTRE_VIRMAN.test(ac)){ yon='virman'; uyari.push('Virman/kart ödemesi olabilir — gelir-gider sayılmaz'); }
+  if(_kartT){
+   /* v51: kart ekstresinde yön, açıklamadaki ÖDEME/İADE kalıbına göre düzeltilir */
+   if(EKSTRE_KART_ODEME.test(ac)){
+    if(yon!=='giris'){yon='giris';uyari.push('Bu satır kart ÖDEMESİ gibi görünüyor — borcu düşürecek, kontrol edin');}
+    else yon='giris';
+   }else if(EKSTRE_KART_IADE.test(ac)){
+    if(yon!=='giris'){yon='giris';uyari.push('Bu satır İADE gibi görünüyor — kart borcunu düşürecek, kontrol edin');}
+   }
+  }else if(EKSTRE_VIRMAN.test(ac)){ yon='virman'; uyari.push('Virman/kart ödemesi olabilir — gelir-gider sayılmaz'); }
   /* v49 DENETİM: tahmin edilmiş sütunlardan gelen satır ASLA otomatik işaretli gelmez */
   if(esle.tahmin)uyari.push('Sütunlar tahmin edildi — tutar ve yönü doğrulayın');
 
@@ -10380,6 +10642,17 @@ function ekstreYon(v){
    Kalip NORMALLESTIRILMIS metne uygulanir (trNorm). */
 var EKSTRE_VIRMAN_K=/virman|hesaplar arasi|hesaplarim arasi|kendi hesab|kredi kart[a-z]* .*odem|k\.?kart[a-z]* .*odem|kart borc[a-z]* odem|kkb odem|kmh kapama|kart ekstre odem|otomatik odeme talimati kart/;
 var EKSTRE_VIRMAN={test:function(v){return EKSTRE_VIRMAN_K.test(trNorm(v));}};
+/* v51 DENETİM (KRİTİK): EKSTRE_VIRMAN kalıbı BANKA ekstresi için yazılmıştı ama
+   KART ekstresine de uygulanıyordu. Kart ekstresindeki "KREDİ KARTI AİDAT ÖDEMESİ",
+   "KREDİ KARTI YILLIK ÜCRET ÖDEMESİ", "KREDİ KARTI İLE ÖDEME MIGROS" gibi satırlar
+   GERÇEK HARCAMADIR; kalıba takılınca "virman" sayılıp ÖDEME olarak yazılıyor,
+   kart borcu artmak yerine AZALIYORDU (sapma tutarın 2 katı) ve gider defterine
+   hiç kayıt düşmüyordu. Kart ekstresinde yalnızca aşağıdaki kalıplar ödemedir ve
+   satırın TAMAMINA çapalanır — işyeri adının içinde "ödeme" geçmesi yetmez. */
+var EKSTRE_KART_ODEME_K=/^(odeme|odemeniz|odemeleriniz|odeme tutari|yapilan odeme|hesap ozeti odemesi|ekstre odemesi|borc odemesi|kart borcu odemesi|tahsilat|otomatik odeme|otomatik ode(me)? talimati|virman)( *[-–—:] *.*)?$/;
+var EKSTRE_KART_IADE_K=/\b(iade|iptal|refund|ret|alacak kaydi|puan iadesi|chargeback|harcama iptali)\b/;
+var EKSTRE_KART_ODEME={test:function(v){return EKSTRE_KART_ODEME_K.test(trNorm(v));}};
+var EKSTRE_KART_IADE={test:function(v){return EKSTRE_KART_IADE_K.test(trNorm(v));}};
 /* v49 DENETIM (performans): ekstreOnizle HER satir icin ekstreMukerrer cagiriyor,
    o da TUM defteri bastan tariyordu. 2.000 satir x 20.000 kayit = 40 milyon
    karsilastirma ve bu her yeniden cizimde tekrarlaniyordu. Artik tek gecisli indeks. */
@@ -10490,7 +10763,7 @@ function ekstreYukle(tur,hedefId){
 
 /* ---------- 2) OKU — her dosya kendi yolundan gider (v49) ---------- */
 /* Bir AI yanıtındaki satırları EKSTRE.satirlar'a ekler (fotoğraf ve PDF metni ortak) */
-function ekstreAISatirEkle(j,kaynak){
+function ekstreAISatirEkle(j,kaynak,tur){
  var n=0;
  (j.satirlar||[]).forEach(function(s){
   var ay=ekstreTutar(s.tutar);
@@ -10499,9 +10772,20 @@ function ekstreAISatirEkle(j,kaynak){
   var ac=String(s.aciklama||'').slice(0,160);
   var tarih=ekstreTarih(s.tarih);
   var uyari=[];
-  if(yon===null){ yon=(ay.eksi?'cikis':'giris'); uyari.push('Yön okunamadı — kontrol edin'); }
-  else if(ay.eksi&&yon==='giris'){ uyari.push('Tutar eksi ama yön "giriş" okundu — kontrol edin'); }
-  if(EKSTRE_VIRMAN.test(ac)){ yon='virman'; uyari.push('Virman/kart ödemesi olabilir — gelir-gider sayılmaz'); }
+  /* v51: kart ekstresinde işaretsiz tutar HARCAMA'dır — bkz. ekstreTablodanSatirlar */
+  var _kartAI=(tur!==undefined&&tur!==null&&tur!=='')?(tur==='kart'):!!(EKSTRE&&EKSTRE.tur==='kart');
+  if(yon===null){
+   yon=_kartAI?(ay.eksi?'giris':'cikis'):(ay.eksi?'cikis':'giris');
+   uyari.push(_kartAI?'Yön okunamadı — harcama varsayıldı, kontrol edin':'Yön okunamadı — kontrol edin');
+  }
+  else if(ay.eksi&&yon==='giris'&&!_kartAI){ uyari.push('Tutar eksi ama yön "giriş" okundu — kontrol edin'); }
+  if(_kartAI){
+   /* v51: kart ekstresinde "virman" yoktur — ödeme ya da iade vardır (bkz. tablo yolu) */
+   if(EKSTRE_KART_ODEME.test(ac)){ if(yon!=='giris'){yon='giris';uyari.push('Bu satır kart ÖDEMESİ gibi görünüyor — borcu düşürecek, kontrol edin');} }
+   else if(EKSTRE_KART_IADE.test(ac)){ if(yon!=='giris'){yon='giris';uyari.push('Bu satır İADE gibi görünüyor — kart borcunu düşürecek, kontrol edin');} }
+   else if(yon==='virman'){ yon='cikis'; uyari.push('Kart ekstresinde virman olmaz — harcama varsayıldı, kontrol edin'); }
+  }
+  else if(EKSTRE_VIRMAN.test(ac)){ yon='virman'; uyari.push('Virman/kart ödemesi olabilir — gelir-gider sayılmaz'); }
   if(!tarih&&s.tarih) uyari.push('Tarih okunamadı ('+String(s.tarih).slice(0,20)+') — elle girin');
   EKSTRE.satirlar.push({
    sec:tutar>0&&!!tarih&&!uyari.length, tarih:tarih, aciklama:ac,
@@ -10650,6 +10934,12 @@ function ekstreOnizle(hata){
  if(hata!==undefined)EKSTRE.hata=hata; else hata=EKSTRE.hata;
  var kats=catOptsUser('gider').map(function(c){return Array.isArray(c)?c[0]:c;});
  var katsG=catOptsUser('gelir').map(function(c){return Array.isArray(c)?c[0]:c;});
+ /* v51 DENETİM: kart ekstresinde "giriş/çıkış (gelir/gider)" dili yanlış. Kartta
+    çıkış = HARCAMA (borç artar), giriş = ÖDEME/İADE (borç azalır). Kullanıcı
+    yönü doğrulayamadığı için ters okunan satırlar fark edilmiyordu. */
+ var _kartEk=(EKSTRE.tur==='kart');
+ var _etCikis=_kartEk?'− Harcama (kart borcu artar)':'− Çıkış (gider)';
+ var _etGiris=_kartEk?'+ Ödeme / iade (kart borcu azalır)':'+ Giriş (gelir)';
  var giris=0,cikis=0,secili=0,muk=0;
  _ekMukIdx=ekstreMukIndeks(EKSTRE.hedef,EKSTRE.tur);   /* v49: tek sefer kur */
  EKSTRE.satirlar.forEach(function(s,i){
@@ -10661,7 +10951,7 @@ function ekstreOnizle(hata){
   if(s.sec){secili++; if(s.yon==='giris')giris+=s.tutar; else if(s.yon==='cikis')cikis+=s.tutar;}
  });
  var satirHtml=EKSTRE.satirlar.map(function(s,i){
-  var opts=(s.yon==='giris'?katsG:kats);
+  var opts=(_kartEk?kats:(s.yon==='giris'?katsG:kats));   /* v51: kartta gelir kategorisi yok */
   var uy=(s.uyari||[]).map(function(u){return '<div class="tiny" style="color:var(--warn)">\u26a0 '+esc(u)+'</div>';}).join('');
   var tutarStr=s.tutar?s.tutar.toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2}):'';
   return '<tr'+(s.muk?' style="background:rgba(192,57,43,.07)"':((s.uyari&&s.uyari.length)?' style="background:rgba(192,122,29,.07)"':''))+'>'+
@@ -10672,14 +10962,15 @@ function ekstreOnizle(hata){
      (s.tutar<=0?'<div class="tiny" style="color:var(--warn)">\u26a0 Tutar okunamad\u0131 \u2014 elle girin</div>':'')+uy+
      '<div class="tiny" style="color:var(--ink3)">\ud83d\udcf7 '+esc(s.ham)+' <i>(bu metin de yapay zeka okumas\u0131d\u0131r \u2014 foto\u011frafla kar\u015f\u0131la\u015ft\u0131r\u0131n)</i></div></td>'+
    '<td><select data-ek="yon" data-i="'+i+'">'+
-     '<option value="cikis"'+(s.yon==='cikis'?' selected':'')+'>\u2212 \u00c7\u0131k\u0131\u015f (gider)</option>'+
-     '<option value="giris"'+(s.yon==='giris'?' selected':'')+'>+ Giri\u015f (gelir)</option>'+
+     '<option value="cikis"'+(s.yon==='cikis'?' selected':'')+'>'+_etCikis+'</option>'+
+     '<option value="giris"'+(s.yon==='giris'?' selected':'')+'>'+_etGiris+'</option>'+
      /* v48 DENETIM (KRITIK): virman / kart odemesi secenegi yoktu - kendi hesaplari
         arasi transfer sahte ciro, kart odemesi cift gider uretiyordu. */
-     '<option value="virman"'+(s.yon==='virman'?' selected':'')+'>\u21c4 Virman / kart \u00f6demesi</option></select></td>'+
+     /* v51: kart ekstresinde virman yoktur \u2014 se\u00e7enek yaln\u0131zca banka hesab\u0131nda \u00e7\u0131kar */
+     (_kartEk?'':'<option value="virman"'+(s.yon==='virman'?' selected':'')+'>\u21c4 Virman / kart \u00f6demesi</option>')+'</select></td>'+
    '<td><input type="text" data-ek="tutar" data-i="'+i+'" value="'+esc(tutarStr)+'" style="max-width:120px;text-align:right"></td>'+
-   '<td>'+(s.yon==='virman'
-     ? '<span class="chip g">gelir-gider say\u0131lmaz</span>'
+   '<td>'+((s.yon==='virman'||(_kartEk&&s.yon==='giris'))
+     ? '<span class="chip g">'+(_kartEk?'kart borcunu d\u00fc\u015f\u00fcr\u00fcr':'gelir-gider say\u0131lmaz')+'</span>'
      : '<select data-ek="kat" data-i="'+i+'">'+opts.map(function(c){
         return '<option value="'+esc(c)+'"'+(c===s.kat?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select>')+'</td>'+
    '</tr>'; }).join('');
@@ -10746,7 +11037,8 @@ function ekstreOzetle(){
  EKSTRE.satirlar.forEach(function(s){ if(!s.sec)return; n++;
   if(s.yon==='giris')g+=s.tutar; else if(s.yon==='cikis')c+=s.tutar; else v+=s.tutar; });
  var el=document.getElementById('ekstreOzet');
- if(el)el.innerHTML='<b>'+n+' satır seçili</b> · giriş <b style="color:var(--pos)">'+fmt0(g)+'</b> · çıkış <b style="color:var(--neg)">'+fmt0(c)+'</b>'+(v?' · virman <b>'+fmt0(v)+'</b>':'');
+ var _k=(EKSTRE.tur==='kart');   /* v51: kart dilinde özet */
+ if(el)el.innerHTML='<b>'+n+' satır seçili</b> · '+(_k?'harcama':'çıkış')+' <b style="color:var(--neg)">'+fmt0(c)+'</b> · '+(_k?'ödeme/iade':'giriş')+' <b style="color:var(--pos)">'+fmt0(g)+'</b>'+(v?' · virman <b>'+fmt0(v)+'</b>':'');
 }
 
 /* ---------- 4) kaydet ---------- */
@@ -10763,8 +11055,12 @@ function ekstreKaydet(){
  var ileri=sec.filter(function(s){return s.tarih>todayISO();});
  var mukN=sec.filter(function(s){return s.muk;}).length;
  var g=0,c=0,v=0;sec.forEach(function(s){ if(s.yon==='giris')g+=s.tutar; else if(s.yon==='cikis')c+=s.tutar; else v+=s.tutar; });
- uiConfirm(sec.length+' satır '+ekstreHedefAd()+' hesabına kaydedilecek.\n\n'+
-  'Giriş (gelir): '+fmt0(g)+'\nÇıkış (gider): '+fmt0(c)+
+ var _kOnay=(EKSTRE.tur==='kart');   /* v51: kart dilinde onay metni */
+ uiConfirm(sec.length+' satır '+ekstreHedefAd()+(_kOnay?' kartına':' hesabına')+' kaydedilecek.\n\n'+
+  (_kOnay
+   ? ('Harcama (kart borcu ARTAR): '+fmt0(c)+'\nÖdeme / iade (kart borcu AZALIR): '+fmt0(g)+
+      '\n\nKart borcu net '+(c-g>=0?'+':'')+fmt0(c-g)+' değişecek.')
+   : ('Giriş (gelir): '+fmt0(g)+'\nÇıkış (gider): '+fmt0(c)))+
   (v?('\nVirman / kart ödemesi: '+fmt0(v)+'  — kâr/zarara GİRMEZ, yalnızca kasa hareketi olarak işlenir'):'')+
   (ileri.length?('\n\n⚠ '+ileri.length+' satırın tarihi GELECEKTE — yanlış okunmuş olabilir.'):'')+
   (mukN?('\n\n⚠ DİKKAT: '+mukN+' satır MÜKERRER ŞÜPHELİ (aynı gün, aynı tutarda kayıt zaten var). Yine de kaydedilecek.'):'')+
@@ -10785,13 +11081,25 @@ function ekstreKaydet(){
     /* v49 DENETIM (KRITIK): 'virman' degeri 'giris' olmadigi icin HARCAMA'ya dusuyordu;
        cardDebt harcamayi borca EKLEDIGI icin kart borcu odemesi borcu artiriyordu
        (hata odemenin 2 kati). Yalnizca CIKIS harcamadir. */
+    /* v51: İADE satırı bir ödeme DEĞİL, gider iptalidir. Eskiden yalnızca kart borcu
+       düşüyordu; gider defterindeki asıl harcama olduğu gibi kalıyor, kâr olduğundan
+       düşük raporlanıyordu (1.250 harcama + 300 iade → defterde 1.250, gerçek 950).
+       Artık "Gider İadesi" kalemiyle bir alacak kaydı yazılır; net gider doğru çıkar. */
+    var _iade=(s.yon==='giris'&&EKSTRE_KART_IADE.test(s.aciklama||''));
     yCard.push({id:cdid,co:eco,cardId:EKSTRE.hedef,type:(s.yon==='cikis'?'harcama':'odeme'),
-     amount:s.tutar,date:s.tarih,cat:vir?'Grup İçi':s.kat,taksit:1,desc:aciklama,ekstre:1,ekstreGrup:icId});
+     amount:s.tutar,date:s.tarih,
+     cat:(s.yon==='cikis'?s.kat:(_iade?'Gider İadesi':'')),taksit:1,
+     desc:aciklama+(_iade?' (iade)':''),ekstre:1,ekstreGrup:icId});
     if(s.yon==='cikis'){
      yTx.push({id:nid(),co:eco,type:'gider',date:s.tarih,amount:s.tutar,accId:'',src:'card',
       cardTxnId:cdid,cat:s.kat,desc:aciklama+' (kredi kartı)',ekstre:1,ekstreGrup:icId});
+    }else if(_iade){
+     ensureCat('gelir','Gider İadesi');
+     yTx.push({id:nid(),co:eco,type:'gelir',date:s.tarih,amount:s.tutar,accId:'',src:'card',
+      cardTxnId:cdid,cat:'Gider İadesi',iade:1,
+      desc:aciklama+' (kredi kartı iadesi — gideri geri alır)',ekstre:1,ekstreGrup:icId});
     }
-    /* kart ödemesi (giriş) gider yazmaz — kart borcunu düşürür; doğru davranış */
+    /* kart ÖDEMESİ (giriş, iade değil) gider/gelir yazmaz — yalnız kart borcunu düşürür */
    }else{
     var r={id:nid(),co:eco,type:(s.yon==='giris'?'gelir':'gider'),date:s.tarih,
      amount:s.tutar,accId:EKSTRE.hedef,cat:vir?'Grup İçi':s.kat,
