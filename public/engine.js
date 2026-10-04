@@ -245,6 +245,60 @@ function fixState(j){ // eksik alanları tamamla (sürüm geçişleri veri kaybe
  (j.users||[]).forEach(function(u){ // v10: eski (yalnızca e-postalı) kayıtlar için otomatik kullanıcı adı türet, kimse dışarıda kalmasın
   if(!u.username){ u.username=String((u.email||'kullanici').split('@')[0]||'kullanici').toLowerCase().replace(/[^a-z0-9_.-]/g,'')||('u'+Math.random().toString(36).slice(2,7)); }
  });
+ /* v52 DENETİM — iki sessiz veri hatası burada kapatılır:
+    1) TUTAR METİN OLARAK gelmiş olabilir. Elle düzenlenmiş ya da başka bir araçla
+       üretilmiş bir yedekte amount:"1.500,75" gibi bir değer, rapor toplamını NaN
+       yapıyor ve ekrana "0 ₺" yazıyordu. Tüm defterlerdeki tutar alanları tek
+       geçişte sayıya çevrilir (parseAmt Türk binlik/ondalık biçimini bilir).
+    2) S.seq yedekten geldiği gibi kabul ediliyordu; mevcut kimliklerin gerisinde
+       kalırsa yeni kayıt ESKİ bir kimliği alıp bulut birleştirmesinde bir kaydı
+       yok ediyordu. seq en büyük kimliğin üstüne taşınır. */
+ try{
+  /* v52 DENETİM: üç alan adı hayalîydi (stock.alis/satis, stockTxns.unit, partners.pay)
+     ve üç gerçek para alanı atlanıyordu (stock.cost, stockTxns.amount, partners.share,
+     pos.comm). Metin kalan bir `stock.cost` "Stok Değeri 0 ₺" yazdırıyordu. */
+  var SAY={txns:['amount'],cariTxns:['amount'],cardTxns:['amount'],staffTxns:['amount'],
+   fixedLogs:['amount'],cheques:['tutar'],stockTxns:['qty','amount'],assets:['cost'],
+   budgets:['amount'],accounts:['opening'],cards:['limit'],cari:['opening','riskLimit'],
+   staff:['salary'],fixed:['amount'],stock:['qty','cost','min'],
+   posEntries:['gross','comm','net'],partners:['share'],pos:['comm','blokaj']};
+  var _dz=0;
+  Object.keys(SAY).forEach(function(k){
+   if(!Array.isArray(j[k]))return;
+   j[k].forEach(function(r){
+    SAY[k].forEach(function(al){
+     if(r[al]===undefined||r[al]===null||r[al]==='')return;
+     if(typeof r[al]==='number'&&isFinite(r[al]))return;
+     /* v52: '2026-10-05' gibi tarih benzeri bir metin parseAmt ile 2026'ya dönüşüyordu —
+        dokunulmaz, denetim bekçisi yakalasın. Okunamayan değer de 0'a çevrilmez. */
+     if(typeof r[al]==='string'&&/^\s*\d{4}-\d{2}-\d{2}/.test(r[al]))return;
+     var v=parseAmt(r[al]);
+     if(!isFinite(v))return;
+     r[al]=v;
+     _dz++;
+    });
+   });
+  });
+  if(_dz)try{console.warn('fixState: '+_dz+' tutar alanı sayıya çevrildi');}catch(e){}
+  var enBuyuk=0;
+  ['txns','cariTxns','cardTxns','staffTxns','posEntries','cheques','fixedLogs','stockTxns','assets','budgets','leaves','tasks','notes'].forEach(function(k){
+   (Array.isArray(j[k])?j[k]:[]).forEach(function(r){
+    /* v52: kimlik iki biçimde olabilir — eski 'r'+seq36+ms4, yeni 'r'+seq36+ms4+rnd3.
+       Tek non-greedy kalıp uzun seq'lerde yanlış çözüyordu; iki kalıbın BÜYÜĞÜ alınır. */
+    var _id=String(r&&r.id||''),_mx=0;
+    [/^r([0-9a-z]+)[0-9a-z]{4}[0-9a-z]{3}$/,/^r([0-9a-z]+)[0-9a-z]{4}$/].forEach(function(re){
+     var mm=re.exec(_id); if(!mm)return;
+     var vv=parseInt(mm[1],36); if(isFinite(vv)&&vv>_mx)_mx=vv;
+    });
+    if(_mx>enBuyuk)enBuyuk=_mx;
+   });
+  });
+  if(!(+j.seq>enBuyuk))j.seq=enBuyuk+1;
+ }catch(e){}
+ /* v52 DENETİM: cari fatura indeksi yalnızca save() içinde temizleniyordu; buluttan
+    gelen tazeleme (checkCloudFresh / casLoadRemote / yedek geri yükleme) save()
+    çağırmadığı için indeks BAYAT kalıp tahakkuk cirosunu 2 katına çıkarıyordu. */
+ try{cariFaturaIdxTazele();}catch(e){}
  return j;
 }
 var READONLY=false; // A7: bağlantı hatasında salt-okunur mod — eski yedek/seed CANLI verinin üzerine asla otomatik yazılmaz
@@ -616,6 +670,8 @@ function saveNow(){ // YALNIZCA buluta (ortak/çevrimiçi depo) kaydeder — cih
 function save(){
  try{konKartTazele();}catch(e){} /* v47: kontrol kartı önbelleği */
  try{katRozetTazele();}catch(e){}  /* v50: kategori uyarı rozeti önbelleği */
+ try{gdRozetTazele();}catch(e){}   /* v52: gelir denetimi rozeti önbelleği */
+ try{cariFaturaIdxTazele();}catch(e){}  /* v52: cari fatura indeksi */
  if(READONLY){try{toast('🔒 Salt-okunur mod — bu değişiklik KAYDEDİLMEDİ');}catch(e){} return;} // v14-H11: eskiden sessizce yutuluyordu, kullanıcı "kaydedildi" toast'ını görüyordu
  dirty=true;
  clearTimeout(saveT);
@@ -706,7 +762,11 @@ window.addEventListener('beforeunload',(e)=>{
 });
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&dirty){clearTimeout(saveT);saveNow();}});
 
-const nid=()=> 'r'+(S.seq++).toString(36)+Date.now().toString(36).slice(-4);
+/* v52 DENETİM: iki cihaz aynı `S.seq` ve aynı milisaniyeden kimlik üretince AYNI id
+   doğuyordu; bulut birleştirmesi id ile eşleştirdiği için kayıtlardan biri SESSİZCE
+   yok oluyor ve "toplam gelir eksik" çıkıyordu. Rastgele ek bu çakışmayı pratikte
+   imkânsız kılar; fixState de seq'i mevcut en büyük kimliğin üstüne taşır. */
+const nid=()=> 'r'+(S.seq++).toString(36)+Date.now().toString(36).slice(-4)+Math.random().toString(36).slice(2,5);
 function pushRec(arr,rec){ arr.push(stampCreate(rec)); return rec; } // B3: stampCreate unutulamaz hale gelsin
 function stampCreate(rec){ rec.createdBy=SESSION?SESSION.username:''; rec.createdAt=new Date().toISOString(); return rec; } // v16: kaydı kimin oluşturduğunu damgalar
 /* v47: DEĞİŞİKLİK GÜNLÜĞÜ — "kim neyi neden neye çevirdi" sorusunun cevabı.
@@ -759,7 +819,9 @@ const fmtBytes=n=>{n=+n||0;if(n>=1024*1024)return (n/1024/1024).toFixed(2)+' MB'
 const kfmt=n=>{n=+n||0;const a=Math.abs(n);if(a>=1e6)return (n/1e6).toLocaleString('tr-TR',{maximumFractionDigits:1})+' M';if(a>=1e3)return (n/1e3).toLocaleString('tr-TR',{maximumFractionDigits:0})+' bin';return Math.round(n).toString();};
 const todayISO=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
 const monthISO=()=>todayISO().slice(0,7);
-const dTR=iso=>{if(!iso)return'';const[y,m,d]=iso.split('-');return d+'.'+m+'.'+y;};
+/* v52 GÜVENLİK: dTR biçime uymayan girdiyi OLDUĞU GİBİ döndürüyordu; bozuk bir
+   tarih alanı (ekstre/yedek yoluyla girebiliyor) HTML taşırsa escape'siz basılıyordu. */
+const dTR=iso=>{if(!iso)return'';const s0=String(iso);if(!/^\d{4}-\d{2}-\d{2}/.test(s0))return esc(s0.slice(0,30));const[y,m,d]=s0.slice(0,10).split('-');return d+'.'+m+'.'+y;};
 /* v48 DENETİM: ay aralıkları `-31` ile kuruluyordu. Hesap doğru çalışıyordu (string
    karşılaştırması) ama kullanıcıya '31.02.2026' gibi olmayan tarihler gösteriliyordu. */
 const aySon=p=>{const y=+String(p).slice(0,4),m=+String(p).slice(5,7);
@@ -993,26 +1055,35 @@ function spark(values,color){
 const CEK_DURUM_TR={portfoy:'Portföyde',tahsilde:'Tahsilde',ciro:'Ciro edildi',kapandi:'Kapandı',karsiliksiz:'Karşılıksız'}; // v14-H3: tek kaynak — Excel/PDF'te 'tahsilde' ve 'ciro' boş çıkıyordu
 /* ---------- HESAPLAMALAR ---------- */
 function accBalance(a){
- let b=+a.opening||0;
+ let b=+a.opening||0; if(!isFinite(b))b=0;
  for(const t of S.txns){
   if(t.co!==a.co||t.deletedAt)continue;
   if(t.valueDate&&t.valueDate>todayISO())continue; // B2: valör günü gelmemiş tutar (POS blokajı) bakiyeye girmez
-  if(t.type==='gelir'&&t.accId===a.id)b+=+t.amount;
-  else if(t.type==='gider'&&t.accId===a.id)b-=+t.amount;
-  else if(t.type==='virman'){if(t.accId===a.id)b-=+t.amount;if(t.accId2===a.id)b+=+t.amount;}
+  /* v52: tarihi geçersiz kayıt bakiyeye giriyor ama hiçbir dönem akışına girmiyordu —
+     hesap detayında "Dönem Sonu" ile "Güncel Bakiye" çelişiyordu. Denetim ekranı
+     bu kayıtları "Tarihi geçersiz kayıt" bulgusuyla gösterir. */
+  if(!gunGecerli(t.valueDate||t.date))continue;
+  /* v52: tek bir metin tutar bakiyeyi NaN yapıyor, fmt0(NaN) "0 ₺" yazıyordu —
+     kullanıcı "raporda ciro var ama bankada 0 ₺" görüyordu. */
+  const _a=txAmt(t);
+  if(t.type==='gelir'&&t.accId===a.id)b+=_a;
+  else if(t.type==='gider'&&t.accId===a.id)b-=_a;
+  else if(t.type==='virman'){if(t.accId===a.id)b-=_a;if(t.accId2===a.id)b+=_a;}
  }
- return b;
+ return Math.round(b*100)/100;
 }
 function accRangeFlow(a,from,to){ // seçili tarih aralığında bir hesabın dönem başı/giriş/çıkış/dönem sonu özeti
- let opening=+a.opening||0,into=0,out=0;
+ let opening=+a.opening||0,into=0,out=0; if(!isFinite(opening))opening=0;
  for(const t of S.txns){
   if(t.co!==a.co||t.deletedAt)continue;
+  const _a=txAmt(t);   /* v52 */
   let d=0;
-  if(t.type==='gelir'&&t.accId===a.id)d=+t.amount;
-  else if(t.type==='gider'&&t.accId===a.id)d=-t.amount;
-  else if(t.type==='virman'){if(t.accId===a.id)d-=+t.amount;if(t.accId2===a.id)d+=+t.amount;}
+  if(t.type==='gelir'&&t.accId===a.id)d=_a;
+  else if(t.type==='gider'&&t.accId===a.id)d=-_a;
+  else if(t.type==='virman'){if(t.accId===a.id)d-=_a;if(t.accId2===a.id)d+=_a;}
   if(!d)continue;
   var _fd=t.valueDate||t.date; // B2: hesap akışında valör tarihi esas
+  if(!gunGecerli(_fd))continue;   /* v52: tarihsiz kayıt ne devire ne döneme girsin */
   if(_fd<from)opening+=d;
   else if(_fd<=to){ if(d>0)into+=d; else out+=-d; }
  }
@@ -1025,7 +1096,7 @@ function accSeries(a,days){ // son N gün, gün sonu bakiyeleri (tek geçiş)
  for(const t of S.txns){
   if(t.co!==a.co||t.deletedAt)continue;
   let d=0;
-  if(t.type==='gelir'&&t.accId===a.id)d=+t.amount;
+  if(t.type==='gelir'&&t.accId===a.id)d=txAmt(t);   /* v52 */
   else if(t.type==='gider'&&t.accId===a.id)d=-t.amount;
   else if(t.type==='virman'){if(t.accId===a.id)d-= +t.amount;if(t.accId2===a.id)d+= +t.amount;}
   if(!d)continue;
@@ -1041,7 +1112,8 @@ function dailySeries(co,days){ // gelir/gider günlük serileri (tek geçiş)
  const g={},x={};
  for(const t of S.txns){
   if(t.co!==co||t.type==='virman'||t.date<start||t.deletedAt||t.xfer||t.src==='stok')continue;
-  if(t.type==='gelir')g[t.date]=(g[t.date]||0)+ +t.amount;
+  if(!gunGecerli(t.date))continue;                 /* v52: tarihsiz kayıt sızmasın */
+  if(txYon(t)==='gelir')g[t.date]=(g[t.date]||0)+txImzali(t);   /* v52: kontra ters */
   else x[t.date]=(x[t.date]||0)+ +t.amount;
  }
  const labels=[],gv=[],xv=[];
@@ -1055,9 +1127,12 @@ function monthSeries(co,n,cat){ // son N ay {p,label,gelir,gider}
   const p=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
   let g=0,x=0;
   for(const t of S.txns){
-   if(t.co!==co||t.type==='virman'||!t.date.startsWith(p)||t.deletedAt||t.xfer||t.src==='stok')continue;
+   /* v52: `t.date` yoksa `.startsWith` İSTİSNA atıyor ve Raporlar ekranı hiç açılmıyordu */
+   if(t.co!==co||t.type==='virman'||!String(t.date||'').startsWith(p)||t.deletedAt||t.xfer||t.src==='stok')continue;
    if(cat&&t.cat!==cat)continue;
-   if(t.type==='gelir')g+=+t.amount;else x+=+t.amount;
+   var _a=+t.amount; if(!isFinite(_a))continue;
+   if(t.kontra){ if(t.type==='gelir')x-=_a; else g-=_a; continue; }   /* v52 kontra */
+   if(t.type==='gelir')g+=_a;else x+=_a;
   }
   out.push({p,label:AYLAR[+p.slice(5)-1].slice(0,3),gelir:g,gider:x});
  }
@@ -1219,40 +1294,129 @@ function nextDue(day){
  return d;
 }
 function cekOfCariId(id){return S.cheques.find(function(c){return c.id===id&&c.cariId;});} // A1: cariye bagli cek islemi mi
+/* v52: geçerli gün biçimi — tarihi olmayan/bozuk kayıt HER döneme sızıyordu */
+var GUN_BICIM=/^\d{4}-\d{2}-\d{2}$/;
+function gunGecerli(d){return GUN_BICIM.test(String(d||''));}
+/* v52: TEK NOKTADAN tutar okuma. Bozuk (metin/NaN/Infinity) tutar 0 sayılır —
+   eskiden toplamı NaN yapıp ekrana "0 ₺" yazdırıyordu. */
+function txAmt(t){var a=+(t&&t.amount);return isFinite(a)?a:0;}
+/* v52: KONTRA kayıtlarda etkin yön TERSİDİR. Gider iadesi ve merkez gider devri
+   `gelir` olarak saklanır ama ciroya girmez, gideri azaltır. S.txns'i kendi
+   döngüsüyle tarayan her ekran bu yardımcıyı kullanır ki tek bir doğru rakam olsun. */
+function txYon(t){
+ var y=(t&&t.type)||'';
+ if(t&&t.kontra)return y==='gelir'?'gider':(y==='gider'?'gelir':y);
+ return y;
+}
+/* Kontra kayıt, karşı tarafı AZALTIR — işaretli tutar */
+function txImzali(t){return (t&&t.kontra)?-txAmt(t):txAmt(t);}
+/* v52 DENETİM: tahakkuk modunda `cariTxnId` taşıyan HER nakit kaydı eleniyordu, ama
+   accrualAdjust karşılığını yalnızca `fatura:true` cari hareketleri için EKLİYORDU.
+   Sonuç: FATURASI GİRİLMEMİŞ bir cari tahsilatı/ödemesi iki taraftan da düşüp
+   raporda TAMAMEN KAYBOLUYORDU (nakitte 50.000, tahakkukta 0).
+   Doğru kural cari bazlıdır: bir cariye FATURA kesiliyorsa tahakkuk o faturalardan
+   okunur, nakit hareketleri yalnızca tahsilat/ödemedir ve elenir (çift sayım olmaz).
+   Hiç faturası olmayan bir caride ise nakit hareketi tek kayıt kaynağıdır — elenmez. */
+var _cariFaturaIdx=null;
+function cariFaturaIdxTazele(){_cariFaturaIdx=null;}
+function _cariFaturaliMi(cariId){
+ if(!cariId)return false;
+ if(!_cariFaturaIdx){
+  _cariFaturaIdx={};
+  for(var i=0;i<S.cariTxns.length;i++){
+   var c=S.cariTxns[i];
+   if(c.fatura&&!c.deletedAt&&c.cariId)_cariFaturaIdx[c.cariId]=1;
+  }
+ }
+ return !!_cariFaturaIdx[cariId];
+}
+/* v52: tahakkuk modunda elenecek nakit kaydı mı — ve hangi cariye ait.
+   Eleme KOŞULSUZDUR (cariye bağlı her nakit hareketi tahsilat/ödemedir);
+   faturası olmayan kısım accrualAdjust'taki CARİ MUTABAKATI ile geri eklenir. */
+function _tahakkukCari(t){
+ if(t.cariTxnId){
+  var ct=S.cariTxns.find(function(x){return x.id===t.cariTxnId;});
+  return {ele:true,cari:(ct&&ct.cariId)||t.cariId||'_yok'};
+ }
+ if(t.cekId){
+  var ck=cekOfCariId(t.cekId);
+  if(ck)return {ele:true,cari:ck.cariId||'_yok'};
+ }
+ return {ele:false,cari:''};
+}
 function sumRange(co,from,to,opts){
- let g=0,x=0,byCat={},byCatG={};
- const _skipCL=!!(opts&&opts.skipCariLinked); // A1: tahakkuk modunda cari bagli nakit hareketleri (tahsilat/odeme/cek) dusulur — cift sayim onlenir
+ let g=0,x=0,byCat={},byCatG={},bozuk=0,tarihsiz=0,kontra=0,cariNakit={};
+ const _skipCL=!!(opts&&opts.skipCariLinked); // A1: tahakkuk modunda FATURALI cari hareketlere bagli nakit kayitlari dusulur — cift sayim onlenir
  for(const t of S.txns){
   if(t.co!==co||t.type==='virman'||t.deletedAt||t.xfer)continue;
   if(t.src==='stok'&&!(opts&&opts.includeStok))continue; // C3: tahakkuk COGS kaydı nakit toplamına girmez
+  /* v52: `undefined < '2026-03-01'` ve `undefined > '2026-03-31'` İKİSİ DE false'tur —
+     tarihi olmayan kayıt hiçbir tarih kapısına takılmayıp her dönemde sayılıyordu. */
+  if(!gunGecerli(t.date)){tarihsiz++;continue;}
   if(t.date<from||t.date>to)continue;
-  if(_skipCL&&(t.cariTxnId||(t.cekId&&cekOfCariId(t.cekId))))continue;
-  if(t.type==='gelir'){g+=+t.amount;byCatG[t.cat||'Diğer']=(byCatG[t.cat||'Diğer']||0)+ +t.amount;}
-  else {x+=+t.amount; byCat[t.cat||'Diğer']=(byCat[t.cat||'Diğer']||0)+ +t.amount;}
+  if(_skipCL){
+   var _tc=_tahakkukCari(t);
+   if(_tc.ele){
+    /* elenen tutar cari bazında saklanır — accrualAdjust faturayı aşan kısmı geri ekler */
+    var _a0=+t.amount;
+    if(isFinite(_a0)){
+     var _nk=cariNakit[_tc.cari]=cariNakit[_tc.cari]||{gelir:0,gider:0,kat:{},katG:{}};
+     var _y0=txYon(t), _c0=t.cat||'Diğer';
+     if(_y0==='gelir'){_nk.gelir+=_a0;_nk.katG[_c0]=(_nk.katG[_c0]||0)+_a0;}
+     else {_nk.gider+=_a0;_nk.kat[_c0]=(_nk.kat[_c0]||0)+_a0;}
+    }
+    continue;
+   }
+  }
+  /* v52: tek bir metin tutar ("1.500,75") tüm toplamı NaN yapıyor, fmt0(NaN) ise
+     ekrana "0 ₺" yazıyordu — rakam yanlış değil, SIFIR görünüyordu. */
+  const a=+t.amount;
+  if(!isFinite(a)){bozuk++;continue;}
+  /* v52: KONTRA kayıt — gider iadesi, merkez gider devri gibi kalemler ciroya
+     girmez, GİDERİ AZALTIR. Eskiden `gelir` sayıldıkları için ciro şişiyordu
+     (net kâr doğru çıkıyor, "Toplam Gelir" ve ciroya bölünen tüm oranlar yanlış). */
+  if(t.kontra){
+   const _kc=t.cat||'Diğer';
+   if(t.type==='gelir'){x-=a;byCat[_kc]=(byCat[_kc]||0)-a;kontra+=a;}
+   else {g-=a;byCatG[_kc]=(byCatG[_kc]||0)-a;kontra+=a;}
+   continue;
+  }
+  if(t.type==='gelir'){g+=a;byCatG[t.cat||'Diğer']=(byCatG[t.cat||'Diğer']||0)+a;}
+  else {x+=a; byCat[t.cat||'Diğer']=(byCat[t.cat||'Diğer']||0)+a;}
  }
- return {gelir:g,gider:x,net:g-x,byCat,byCatG};
+ Object.keys(byCat).forEach(function(k){byCat[k]=Math.round(byCat[k]*100)/100;});
+ Object.keys(byCatG).forEach(function(k){byCatG[k]=Math.round(byCatG[k]*100)/100;});
+ return {gelir:Math.round(g*100)/100,gider:Math.round(x*100)/100,net:Math.round((g-x)*100)/100,
+  byCat,byCatG,bozuk:bozuk,tarihsiz:tarihsiz,kontra:Math.round(kontra*100)/100,cariNakit:cariNakit};
 }
 function kdvSummary(co,from,to){ // KDV tahsil edilen (gelir) / ödenen (gider) — tutarlar KDV dahil girildiği varsayılır: kdv=tutar×oran/(100+oran)
  let tahsil=0,odenen=0; const byRate={};
  for(const t of S.txns){
   if(t.co!==co||t.type==='virman'||t.deletedAt||!t.vat)continue;
-  if(t.date<from||t.date>to)continue;
+  /* v52: tarih kapısı yoktu — tarihsiz kayıt HER KDV dönemine giriyordu (beyanname
+     öncesi okunan ekran). Bozuk tutar da toplamı NaN yapıyordu. */
+  if(!gunGecerli(t.date)||t.date<from||t.date>to)continue;
   const v=+t.vat||0; if(!v)continue;
-  const kdvAmt=+t.amount*v/(100+v);
-  if(t.type==='gelir')tahsil+=kdvAmt; else odenen+=kdvAmt;
-  const key=(t.type==='gelir'?'Tahsil ':'Ödenen ')+'%'+v;
+  const _a=txAmt(t); if(!_a)continue;
+  const kdvAmt=_a*v/(100+v);
+  const _y=txYon(t);                                   /* v52: kontra kayıt ters taraf */
+  const _ters=!!t.kontra;
+  if(_y==='gelir')tahsil+=kdvAmt; else odenen+=kdvAmt;
+  const key=(_y==='gelir'?'Tahsil ':'Ödenen ')+'%'+v+(_ters?' (iade)':'');
   byRate[key]=(byRate[key]||0)+kdvAmt;
  }
  for(const t of S.cariTxns){
   if(t.co!==co||t.deletedAt||!t.fatura||!t.vat)continue;
-  if(t.date<from||t.date>to)continue;
+  if(!gunGecerli(t.date)||t.date<from||t.date>to)continue;   /* v52 */
   const v=+t.vat||0;if(!v)continue;
-  const kdvAmt=+t.amount*v/(100+v);
+  const _a2=txAmt(t); if(!_a2)continue;
+  const kdvAmt=_a2*v/(100+v);
   if(t.type==='borc')tahsil+=kdvAmt; else odenen+=kdvAmt;
   const key=(t.type==='borc'?'Tahsil (fatura) ':'Ödenen (fatura) ')+'%'+v;
   byRate[key]=(byRate[key]||0)+kdvAmt;
  }
- return {tahsil,odenen,net:tahsil-odenen,byRate};
+ tahsil=Math.round(tahsil*100)/100;odenen=Math.round(odenen*100)/100;
+ return {tahsil,odenen,net:Math.round((tahsil-odenen)*100)/100,byRate};
 }
 function prevPeriodOf(from,to){ // seçili dönemle aynı uzunlukta, hemen öncesindeki dönem (karşılaştırma için)
  const span=Math.round((new Date(to+'T12:00')-new Date(from+'T12:00'))/86400000)+1;
@@ -1465,7 +1629,7 @@ function go(p){
  if(p==='ortak'&&!canAccessCo('ortak')){toast('👥 Ortaklar & Sermaye ekranı için ayrı yetki gerekir — Ayarlar > Kullanıcılar bölümünden verilebilir');p='merkez';} /* v35 */
  PAGE=p;
  document.querySelectorAll('[data-p]').forEach(b=>b.classList.toggle('on',b.dataset.p===p));
- const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,gecmis:rGecmis,kontrol:rKontrol,task:rTask,set:rSet,grup:rGrup,merkez:rMerkez,ortak:rOrtak,katduzelt:rKatDuzelt/* v50 */};
+ const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,gecmis:rGecmis,kontrol:rKontrol,task:rTask,set:rSet,grup:rGrup,merkez:rMerkez,ortak:rOrtak,katduzelt:rKatDuzelt/* v50 */,gelirden:rGelirDen/* v52 */};
  (R[p]||rDash)();
  updateSaveBadge();
  try{window.scrollTo(0,0);}catch(e){}
@@ -1492,7 +1656,9 @@ function parseAmt(v){ // "1.500,75" / "1500.75" / "1500,5" / "1500" / "100.000" 
      3 hane ise nokta binlik ayıracıdır ("100.000"→100000, "1.500.000"→1500000);
      değilse ondalık noktadır ("1.5"→1.5, "1.50"→1.5, "0.75"→0.75). */
   var _p=v.split('.');
-  var _bin=_p.length>1&&_p.slice(1).every(function(g){return /^[0-9]{3}$/.test(g);})&&/^[0-9]+$/.test(_p[0]||'0');
+  /* v52: isaretli sayida ("-5.000") ilk parca "-5" oldugu icin binlik kurali
+     dusuyor ve deger -5 olarak saklaniyordu. Isaret artik kabul edilir. */
+  var _bin=_p.length>1&&_p.slice(1).every(function(g){return /^[0-9]{3}$/.test(g);})&&/^[+-]?[0-9]+$/.test(_p[0]||'0');
   if(_bin)v=_p.join('');
  }
  return parseFloat(v);
@@ -1996,7 +2162,11 @@ function accEkstre(id,from,to){ /* v46: satırlara bağlantı çipleri eklendi *
 }
 
 /* ---------- GELİR-GİDER ---------- */
-var txFilter={type:'',cat:'',from:'',to:'',kz:''};
+/* v52 DENETİM: dönem süzgeci BOŞ başlıyordu, yani ekran TÜM GEÇMİŞİN toplamını
+   gösteriyor ama Net kutusunun altında "Raporlar ekranıyla aynı" yazıyordu.
+   Raporlar o ayı, bu ekran 3 yılı toplayınca iki rakam tutmuyor sanılıyordu.
+   Artık rapor dönemiyle aynı başlar; kullanıcı isterse tarihleri boşaltabilir. */
+var txFilter={type:'',cat:'',from:monthISO()+'-01',to:todayISO(),kz:''};
 /* v45: bir kayıt kâr/zarar tablosuna giriyor mu? Transfer (merkez aktarımı, ortak sermayesi,
    kredi kartı borcu ödemesi, virman) ve stok tahakkuku GELİR/GİDER DEĞİLDİR — sumRange bunları
    zaten eliyordu ama İşlemler ekranının toplamları elemiyordu, bu yüzden ekrandaki "Gelir"
@@ -2007,7 +2177,7 @@ function txSetType(v){txFilter.type=v;rTx();}
 function txSetCat(v){txFilter.cat=v;rTx();}
 function txSetFrom(v){txFilter.from=v;rTx();}
 function txSetTo(v){txFilter.to=v;rTx();}
-function txClear(){txFilter={type:'',cat:'',from:'',to:'',q:'',kz:''};rTx();}
+function txClear(){txFilter={type:'',cat:'',from:'',to:'',q:'',kz:''};rTx();}   /* v52: "temizle" bilinçli olarak TÜM ZAMANLAR'a açar */
 function txSetQ(v){txFilter.q=v;rTx();}
 function filteredTxns(co,f){ // A13: rTx ve exportTxCsv AYNI filtreyi kullanir (q dahil)
  let list=S.txns.filter(t=>t.co===co&&!t.deletedAt);
@@ -2024,9 +2194,11 @@ function rTx(){
  const f=txFilter;
  list.sort((a,b)=>a.date<b.date?1:-1);
  /* v45: toplamlar artık kâr/zarar tablosuyla BİREBİR aynı — transferler ayrı kutuda */
- const g=list.filter(t=>t.type==='gelir'&&txKZ(t)).reduce((s,t)=>s+ +t.amount,0);
+ /* v52: kontra kayıt (gider iadesi / merkez gider devri) ciroya girmez, gideri azaltır;
+    bozuk tutar da toplamı NaN yapmasın. Raporlar ekranıyla aynı kuralı uygular. */
+ const g=list.filter(t=>txYon(t)==='gelir'&&txKZ(t)).reduce((s,t)=>s+txImzali(t),0);
  const x=list.filter(t=>t.type==='gider'&&txKZ(t)).reduce((s,t)=>s+ +t.amount,0);
- const trIn=list.filter(t=>!txKZ(t)&&t.type==='gelir').reduce((s,t)=>s+ +t.amount,0);
+ const trIn=list.filter(t=>!txKZ(t)&&t.type==='gelir').reduce((s,t)=>s+txAmt(t),0);   /* v52 */
  const trOut=list.filter(t=>!txKZ(t)&&t.type!=='gelir').reduce((s,t)=>s+ +t.amount,0);
  const trN=list.filter(t=>!txKZ(t)).length;
  document.getElementById('main').innerHTML= topbar('Gelir - Gider',
@@ -2034,7 +2206,7 @@ function rTx(){
  `<div class="grid ${trN?'g4':'g3'}" style="margin-bottom:16px">
   <div class="kpi p" data-act="txSetType" data-arg="gelir" style="cursor:pointer${f.type==='gelir'?';outline:2px solid var(--acc)':''}" title="Yalnızca gelir kayıtlarını listele"><div class="l">Gelir (filtreli) ↗</div><div class="v">${fmt0(g)}</div><div class="s">kâr/zarara giren · tıklayın</div></div>
   <div class="kpi n" data-act="txSetType" data-arg="gider" style="cursor:pointer${f.type==='gider'?';outline:2px solid var(--acc)':''}" title="Yalnızca gider kayıtlarını listele"><div class="l">Gider (filtreli) ↗</div><div class="v">${fmt0(x)}</div><div class="s">kâr/zarara giren · tıklayın</div></div>
-  <div class="kpi a" data-act="txClear" style="cursor:pointer" title="Filtreleri temizle"><div class="l">Net ↗</div><div class="v">${fmt0(g-x)}</div><div class="s">Raporlar ekranıyla aynı</div></div>
+  <div class="kpi a" data-act="txClear" style="cursor:pointer" title="Filtreleri temizle"><div class="l">Net ↗</div><div class="v">${fmt0(g-x)}</div><div class="s">${(txFilter.from||txFilter.to)?'seçili dönem':'⚠ TÜM ZAMANLAR — dönem süzgeci boş'}</div></div>
   ${trN?`<div class="kpi" data-act="txSetKz" data-arg="xf" style="cursor:pointer;border-left:3px solid #0c6b58${f.kz==='xf'?';outline:2px solid var(--acc)':''}" title="Yalnızca transfer kayıtlarını listele"><div class="l">⇄ Transfer (K/Z dışı) ↗</div><div class="v" style="font-size:16px">+${fmt0(trIn)} / −${fmt0(trOut)}</div><div class="s">${trN} kayıt — merkez aktarımı, ortak sermayesi, kart borç ödemesi, virman</div></div>`:''}</div>
   ${trN?`<div class="card" style="margin-bottom:12px;background:var(--acc-soft)"><p class="tiny" style="margin:0">ℹ Bu listedeki <b>${trN} kayıt transferdir</b> (⇄ işaretli): para gerçekten hareket etti ama <b>gelir ya da gider değildir</b> — merkezden gelen aktarım, ortağın koyduğu sermaye, kredi kartı borç ödemesi ve virman gibi. Yukarıdaki Gelir/Gider kutuları bunları <b>saymıyor</b>; böylece rakamlar Kâr/Zarar tablosuyla birebir tutuyor.</p></div>`:''}
  <div class="card">
@@ -2230,13 +2402,37 @@ function posSettleCore(e,auto){ // B2: tekil settle mantığı — elle ve otoma
  if(!p.accId||!S.accounts.find(x=>x.id===p.accId&&!x.deletedAt)){if(!auto)toast('⚠ Bu POS tanımının bağlı banka hesabı yok ya da silinmiş — para boşluğa yazılmasın diye işlem durduruldu. Önce POS tanımını düzenleyip hesap bağlayın.');return false;}
  const co=e.co||CO;
  const vd=(e.settleDate&&e.settleDate>e.date)?e.settleDate:''; // B2: banka bakiyesi valör (blokaj bitiş) gününde etkilenir, K/Z satış gününde kalır
+ /* v52 DENETİM (KRİTİK): aynı POS girişi için İKİNCİ bir gelir kaydı oluşabiliyordu —
+    kayıt silinip elle "Geçti ✓" denip sonra çöp kutusundan geri getirilince, ya da iki
+    cihaz aynı anda otomatik geçirince. O günün tüm cirosu iki kez sayılıyordu. */
+ /* v52: kontrol yalnızca GELİR kaydına bakıyordu; gelir silinip yeniden geçirilince
+    komisyon gideri İKİ KEZ yazılıyordu. Artık o girişe ait CANLI her kayda bakılır. */
+ var _vg=S.txns.filter(function(t){return t.posEId===e.id&&!t.deletedAt;});
+ if(_vg.length){
+  if(!auto){
+   e.status='gecti';
+   save();                                  /* v52: statü değişikliği diske yazılsın */
+   toast('⛔ Bu POS girişinin kayıtları zaten var ('+fmt0(_vg[0].amount)+' · '+dTR(_vg[0].date)+') — ikinci kez yazılmadı. Yanlışsa önce o kayıtları silin.');
+   try{go('pos');}catch(err){}             /* v52: ekran tazelensin */
+  }else{
+   e.status='gecti';
+   e.noAutoSettle=1;                        /* v52: her açılışta yeniden denemesin */
+  }
+  return false;
+ }
  e.status='gecti';
- S.txns.push(stampCreate({id:nid(),co:co,type:'gelir',date:e.date,valueDate:vd,amount:+e.gross,cat:'Satış Geliri',accId:p.accId,posEId:e.id,cariId:e.cariId||'',vat:p.vatRate||'',desc:'POS aktarımı: '+(p.name||'')+' ('+dTR(e.date)+' satışı)'}));
- S.txns.push(stampCreate({id:nid(),co:co,type:'gider',date:e.date,valueDate:vd,amount:+e.comm,cat:'Banka & Komisyon',accId:p.accId,posEId:e.id,desc:'POS komisyonu: '+(p.name||'')}));
+ var _pctId='';
  if(e.cariId){ // B1: veresiye müşterisinin POS ödemesi cari hesaba tahsilat olarak işlenir
   const _c=S.cari.find(x=>x.id===e.cariId);
-  S.cariTxns.push(stampCreate({id:nid(),co:co,cariId:e.cariId,type:'alacak',amount:+e.gross,date:e.date,posEId:e.id,desc:'POS tahsilatı: '+(p.name||'')+' ('+dTR(e.date)+')'+(_c?' — '+_c.name:'')}));
+  _pctId=nid();
+  S.cariTxns.push(stampCreate({id:_pctId,co:co,cariId:e.cariId,type:'alacak',amount:+e.gross,date:e.date,posEId:e.id,desc:'POS tahsilatı: '+(p.name||'')+' ('+dTR(e.date)+')'+(_c?' — '+_c.name:'')}));
  }
+ /* v52: gelir kaydı cari tahsilatına BAĞLANIR. Eskiden yalnızca `cariId` taşıyordu;
+    tahakkuk modunda elenemediği için aynı satışın faturası varsa İKİ KEZ sayılıyordu. */
+ var _pgRec={id:nid(),co:co,type:'gelir',date:e.date,valueDate:vd,amount:+e.gross,cat:'Satış Geliri',accId:p.accId,posEId:e.id,cariId:e.cariId||'',vat:p.vatRate||'',desc:'POS aktarımı: '+(p.name||'')+' ('+dTR(e.date)+' satışı)'};
+ if(_pctId)_pgRec.cariTxnId=_pctId;
+ S.txns.push(stampCreate(_pgRec));
+ S.txns.push(stampCreate({id:nid(),co:co,type:'gider',date:e.date,valueDate:vd,amount:+e.comm,cat:'Banka & Komisyon',accId:p.accId,posEId:e.id,desc:'POS komisyonu: '+(p.name||'')}));
  try{logAudit('POS hesaba geçti'+(auto?' (otomatik)':''),(p.name||'')+' '+dTR(e.date)+' net '+fmt(e.net));}catch(err){}
  return true;
 }
@@ -3320,19 +3516,46 @@ var repRange={from:monthISO()+'-01',to:todayISO()};
 var repMode='nakit'; // v33: K/Z gorunum modu — 'nakit' (varsayilan) | 'tahakkuk'
 function setRepMode(v){repMode=v==='tahakkuk'?'tahakkuk':'nakit';rRep();}
 function accrualAdjust(co,from,to,s){ // sumRange sonucuna fatura isaretli cari hareketlerini ekler (tahakkuk esasi)
- const r={gelir:s.gelir,gider:s.gider,net:s.net,byCat:Object.assign({},s.byCat),byCatG:Object.assign({},s.byCatG)};
+ const r={gelir:s.gelir,gider:s.gider,net:s.net,byCat:Object.assign({},s.byCat),byCatG:Object.assign({},s.byCatG),
+  bozuk:s.bozuk||0,tarihsiz:s.tarihsiz||0,kontra:s.kontra||0};   /* v52: uyarı sayaçları taşınır */
+ /* v52: cari bazında fatura toplamı — aşağıdaki MUTABAKAT için */
+ var fat={};
  for(const t of S.cariTxns){
   if(t.co!==co||!t.fatura||t.deletedAt)continue;
+  if(!gunGecerli(t.date)){r.tarihsiz++;continue;}
   if(t.date<from||t.date>to)continue;
-  if(t.type==='borc'){r.gelir+=+t.amount;var _gc=t.cat||'Satış Geliri';r.byCatG[_gc]=(r.byCatG[_gc]||0)+ +t.amount;} // v14-R1: 'Fatura Geliri' hiçbir bütçe kaleminin seçemeyeceği bir addı — gerçek kategoriye akıyor
-  else{r.gider+=+t.amount;var _fc=t.cat||'Diğer Gider';r.byCat[_fc]=(r.byCat[_fc]||0)+ +t.amount;} // v14-R1 // B3: alış faturası kategorisi bütçeye/K-Z'ye kendi kaleminde akar
+  const a=+t.amount; if(!isFinite(a)){r.bozuk++;continue;}   /* v52: bozuk fatura tüm toplamı NaN yapıyordu */
+  var _ck=t.cariId||'_yok';
+  fat[_ck]=fat[_ck]||{gelir:0,gider:0};
+  if(t.type==='borc'){r.gelir+=a;fat[_ck].gelir+=a;var _gc=t.cat||'Satış Geliri';r.byCatG[_gc]=(r.byCatG[_gc]||0)+a;} // v14-R1
+  else{r.gider+=a;fat[_ck].gider+=a;var _fc=t.cat||'Diğer Gider';r.byCat[_fc]=(r.byCat[_fc]||0)+a;} // v14-R1 · B3
+ }
+ /* v52 KRİTİK — CARİ MUTABAKATI.
+    `skipCariLinked` cariye bağlı TÜM nakit hareketlerini eler (doğru: faturalı satışın
+    tahsilatı ikinci bir gelir değildir). Ama faturası HİÇ girilmemiş bir satış/alış da
+    böylece iki taraftan düşüp raporda kayboluyordu. Çözüm: elenen nakdin cari bazında
+    fatura toplamını AŞAN kısmı geri eklenir. Faturalı kısım faturadan, faturasız kısım
+    nakitten okunur — ne çift sayım ne kayıp. */
+ if(s.cariNakit){
+  Object.keys(s.cariNakit).forEach(function(ck){
+   var n=s.cariNakit[ck], ff=fat[ck]||{gelir:0,gider:0};
+   var fazlaG=Math.round((n.gelir-ff.gelir)*100)/100;
+   var fazlaX=Math.round((n.gider-ff.gider)*100)/100;
+   if(fazlaG>0.005){r.gelir+=fazlaG;Object.keys(n.katG||{}).forEach(function(c){
+    var pay=Math.min(n.katG[c],fazlaG);if(pay>0){r.byCatG[c]=(r.byCatG[c]||0)+pay;fazlaG-=pay;}});}
+   if(fazlaX>0.005){r.gider+=fazlaX;Object.keys(n.kat||{}).forEach(function(c){
+    var pay=Math.min(n.kat[c],fazlaX);if(pay>0){r.byCat[c]=(r.byCat[c]||0)+pay;fazlaX-=pay;}});}
+  });
  }
  for(const t of S.txns){ // C3: stok kullanım maliyeti (COGS) tahakkuk esasında gider sayılır
   if(t.co!==co||t.deletedAt||t.src!=='stok'||t.type!=='gider')continue;
+  if(!gunGecerli(t.date)){r.tarihsiz++;continue;}
   if(t.date<from||t.date>to)continue;
-  r.gider+=+t.amount;var _sc=t.cat||'Hammadde & Malzeme';if(_sc==='Hammadde & Malzeme (kullanım)')_sc='Hammadde & Malzeme';r.byCat[_sc]=(r.byCat[_sc]||0)+ +t.amount; // v14-R1: bütçe kalemiyle eşleşebilsin
+  const a2=+t.amount; if(!isFinite(a2)){r.bozuk++;continue;}   /* v52 */
+  r.gider+=a2;var _sc=t.cat||'Hammadde & Malzeme';if(_sc==='Hammadde & Malzeme (kullanım)')_sc='Hammadde & Malzeme';r.byCat[_sc]=(r.byCat[_sc]||0)+a2;
  }
- r.net=r.gelir-r.gider;
+ r.gelir=Math.round(r.gelir*100)/100;r.gider=Math.round(r.gider*100)/100;
+ r.net=Math.round((r.gelir-r.gider)*100)/100;
  return r;
 }
 function rangePreset(k){if(k==='g7')return {from:addDays(todayISO(),-6),to:todayISO()}; /* v46 */
@@ -3401,11 +3624,12 @@ function katAyMatris(co,n,tip){
  var m={};
  S.txns.forEach(function(t){
   if(t.co!==co||t.deletedAt||t.type==='virman'||t.xfer||t.src==='stok')return;
-  if((tip==='gelir')!==(t.type==='gelir'))return;
+  if(!gunGecerli(t.date))return;                  /* v52 */
+  if((tip==='gelir')!==(txYon(t)==='gelir'))return;   /* v52: kontra ters taraf */
   var p=String(t.date).slice(0,7);
   if(!aylar.some(function(a){return a.key===p;}))return;
   var k=t.cat||'Diğer';
-  (m[k]=m[k]||{})[p]=(m[k][p]||0)+ +t.amount;
+  (m[k]=m[k]||{})[p]=(m[k][p]||0)+txImzali(t);   /* v52: kontra ters */
  });
  var satirlar=Object.keys(m).map(function(k){
   return {label:k,v:m[k],tot:aylar.reduce(function(s,a){return s+(m[k][a.key]||0);},0)};
@@ -3418,10 +3642,11 @@ function haftaGunAnaliz(co,gun){
  var g=[0,0,0,0,0,0,0],n=[0,0,0,0,0,0,0];
  var from=addDays(todayISO(),-(gun||90));
  S.txns.forEach(function(t){
-  if(t.co!==co||t.deletedAt||t.type!=='gelir'||t.xfer)return;
-  if(t.date<from)return;
+  if(t.co!==co||t.deletedAt||t.xfer)return;
+  if(txYon(t)!=='gelir')return;                       /* v52: kontra ters taraf */
+  if(!gunGecerli(t.date)||t.date<from)return;         /* v52 */
   var d=new Date(t.date+'T12:00').getDay();   /* v48 DENETİM: ISO tarih UTC ayrıştırılıyordu, gün kayıyordu */
-  g[d]+=+t.amount;n[d]++;
+  g[d]+=txImzali(t);n[d]++;
  });
  return ad.map(function(a,i){return {label:a.slice(0,3),tam:a,value:g[i],n:n[i]};});
 }
@@ -3430,11 +3655,12 @@ function sabitDegisken(co,from,to){
  var sabitKat={'Kira':1,'Vergi & SGK':1,'Fatura & Abonelik':1,'Personel':1};
  var sab=0,deg=0,sabK={},degK={};
  S.txns.forEach(function(t){
-  if(t.co!==co||t.deletedAt||t.type!=='gider'||t.xfer||t.src==='stok')return;
-  if(t.date<from||t.date>to)return;
-  var k=t.cat||'Diğer';
-  if(sabitKat[k]){sab+=+t.amount;sabK[k]=(sabK[k]||0)+ +t.amount;}
-  else{deg+=+t.amount;degK[k]=(degK[k]||0)+ +t.amount;}
+  if(t.co!==co||t.deletedAt||t.xfer||t.src==='stok')return;
+  if(txYon(t)!=='gider')return;                       /* v52: kontra ters taraf */
+  if(!gunGecerli(t.date)||t.date<from||t.date>to)return;   /* v52: tarihsiz kayıt her döneme sızıyordu */
+  var k=t.cat||'Diğer', a=txImzali(t);
+  if(sabitKat[k]){sab+=a;sabK[k]=(sabK[k]||0)+a;}
+  else{deg+=a;degK[k]=(degK[k]||0)+a;}
  });
  return {sabit:sab,degisken:deg,sabitKat:sabK,degiskenKat:degK};
 }
@@ -3477,8 +3703,12 @@ function rRep(){
   : ' data-act="veriAc" data-arg="'+Q(o)+'" style="cursor:pointer" title="'+(ipucu||'Kayıtları listele')+'"';
 
  document.getElementById('main').innerHTML= topbar('Raporlar',
-  `<button class="btn gh" data-act="excelDl" data-arg="co">📊 Excel</button><button class="btn gh" data-act="pdfPrint">🖨 PDF</button><button class="btn" data-act="aiSummary" data-arg="co">✦ AI ile Özetle</button><button class="btn ai" data-act="meclisToplanti" data-arg="finans">🏛 Yönetim Meclisi</button>`)+
+  `<button class="btn gh" data-act="go" data-arg="gelirden" title="Gelir kayıtlarını çifte sayım ve sınıflandırma hatası için tara">🔍 Gelir Denetimi</button><button class="btn gh" data-act="excelDl" data-arg="co">📊 Excel</button><button class="btn gh" data-act="pdfPrint">🖨 PDF</button><button class="btn" data-act="aiSummary" data-arg="co">✦ AI ile Özetle</button><button class="btn ai" data-act="meclisToplanti" data-arg="finans">🏛 Yönetim Meclisi</button>`)+
  katUyariRozeti()+ /* v50: kategorisi genel kalmış / gider defterine yazılmamış kayıt varsa uyar */
+ gdUyariRozeti()+  /* v52: gelirde çifte sayım şüphesi varsa uyar */
+ /* v52: tek bir bozuk kayıt rapor toplamını eksiltiyordu ve kullanıcı bunu hiç
+    göremiyordu — eskiden fmt0(NaN) sessizce "0 ₺" yazıyordu. */
+ ((sM.bozuk||sM.tarihsiz)?`<div class="card" style="border-left:4px solid var(--neg);padding:10px 14px;margin-bottom:12px"><p class="tiny" style="margin:0">⛔ <b>Bu rapor eksik hesaplanıyor:</b> ${sM.bozuk?sM.bozuk+' kaydın tutarı sayı olarak okunamadı':''}${sM.bozuk&&sM.tarihsiz?' · ':''}${sM.tarihsiz?sM.tarihsiz+' kaydın tarihi geçersiz':''} — bu kayıtlar toplamın DIŞINDA kaldı. <button class="btn sm" data-act="go" data-arg="gelirden">🔍 Listesini aç</button></p></div>`:'')+
  `<div class="card"><div class="filters">
    <span class="mut" style="align-self:center">Dönem:</span>
    <input type="date" value="${from}" data-actv="repSetFrom">
@@ -3489,7 +3719,7 @@ function rRep(){
    <button class="btn sm gh" data-act="repPreset" data-arg="yil">Bu Yıl</button>
   </div>
   <div class="grid g3">
-   <div class="kpi p"${QA({tur:'gelir',baslik:'Dönem Gelirleri'},'Dönemin gelir kayıtlarını listele')}><div class="l">Toplam Gelir ${TAHAK?'':'↗'}</div><div class="v">${fmt0(sM.gelir)}</div><div class="s">${repMode==='tahakkuk'?'Tahakkuk (faturalı)':'Nakit esas'}</div></div>
+   <div class="kpi p"${QA({tur:'gelir',baslik:'Dönem Gelirleri'},'Dönemin gelir kayıtlarını listele')}><div class="l">Toplam Gelir ${TAHAK?'':'↗'}</div><div class="v">${fmt0(sM.gelir)}</div><div class="s">${repMode==='tahakkuk'?'Tahakkuk (faturalı)':'Nakit esas'} · KDV dahil</div></div>
    <div class="kpi n"${QA({tur:'gider',baslik:'Dönem Giderleri'},'Dönemin gider kayıtlarını listele')}><div class="l">Toplam Gider ${TAHAK?'':'↗'}</div><div class="v">${fmt0(sM.gider)}</div><div class="s">${repMode==='tahakkuk'?'Tahakkuk (faturalı)':'Nakit esas'}</div></div>
    <div class="kpi a"${QA({baslik:'Dönemin Tüm Kayıtları'})}><div class="l">Net Sonuç ${TAHAK?'':'↗'}</div><div class="v">${fmt0(sM.net)}</div><div class="s">Marj: %${sM.gelir?(sM.net/sM.gelir*100).toFixed(1):0} · ${repMode==='tahakkuk'?'Tahakkuk':'Nakit'}</div></div>
   </div></div>
@@ -3638,7 +3868,9 @@ function repKarsilastirKart(from,to,Q){
 /* --- ORANLAR --- */
 function repOranKart(from,to,Q){
  var s=sumRange(CO,from,to);
- var per=s.byCat['Personel']||0, kira=s.byCat['Kira']||0, ham=s.byCat['Hammadde & Malzeme']||0;
+ /* v52: kontra kayıtlar bir kategoriyi negatife düşürebilir; negatif oran "sağlıklı"
+    yeşil gösterilmesin diye tabanda 0'a kırpılır. */
+ var per=Math.max(0,s.byCat['Personel']||0), kira=Math.max(0,s.byCat['Kira']||0), ham=Math.max(0,s.byCat['Hammadde & Malzeme']||0);
  var o=function(ad,v,bant,ipucu,arg){
   var p=s.gelir?(v/s.gelir*100):0;
   var renk=bant?(p>bant[1]?'n':p<bant[0]?'p':'w'):'';
@@ -3754,10 +3986,11 @@ function grupKatMatris(from,to,tip,rows){
  S.txns.forEach(function(t){
   if(t.deletedAt||t.xfer||t.type==='virman'||t.src==='stok')return;
   if(!canAccessCo(t.co))return;
-  if((tip==='gelir')!==(t.type==='gelir'))return;
+  if(!gunGecerli(t.date))return;                  /* v52 */
+  if((tip==='gelir')!==(txYon(t)==='gelir'))return;   /* v52: kontra ters taraf */
   if(from&&t.date<from)return; if(to&&t.date>to)return;
   var k=t.cat||'Diğer';
-  (m[k]=m[k]||{})[t.co]=(m[k][t.co]||0)+ +t.amount;
+  (m[k]=m[k]||{})[t.co]=(m[k][t.co]||0)+txImzali(t);   /* v52: kontra ters */
  });
  var satirlar=Object.keys(m).map(function(k){
   return {label:k,v:m[k],tot:defterler.reduce(function(s,d){return s+(m[k][d.key]||0);},0)};
@@ -4642,7 +4875,7 @@ function modSum(kind){
   const perAcc=accsF.map(a=>{
    let g=0,x=0;
    for(const t of list){
-    if(t.type==='gelir'&&t.accId===a.id)g+=+t.amount;
+    if(t.type==='gelir'&&t.accId===a.id)g+=txAmt(t);   /* v52 */
     else if(t.type==='gider'&&t.accId===a.id)x+=+t.amount;
     else if(t.type==='virman'){if(t.accId2===a.id)g+=+t.amount;if(t.accId===a.id)x+=+t.amount;}
    }
@@ -5151,7 +5384,9 @@ function rBudget(){
  const gecenGun=_isCur?+todayISO().slice(8):ayGunu;
  const paceK=gecenGun/ayGunu; // C4: ay icinde gecen gun orani
  const hedef=list.reduce((t,b)=>t+ +b.amount,0);
- const gercek=list.reduce((t,b)=>t+(s.byCat[b.cat]||0),0);
+ /* v52: kontra kayıtlar bir kategoriyi negatife düşürebilir — bütçe "Gerçekleşen
+    Gider −1.000 ₺", "Kullanım %−20" ve negatif genişlikli çubuk üretiyordu. */
+ const gercek=list.reduce((t,b)=>t+Math.max(0,s.byCat[b.cat]||0),0);
  document.getElementById('main').innerHTML= topbar('Bütçe Kontrolü',
   `<button class="btn" data-act="budgetForm">＋ Bütçe Kalemi</button>`)+
  `<div class="card"><div class="filters"><span class="mut" style="align-self:center">Dönem:</span>
@@ -5162,11 +5397,11 @@ function rBudget(){
  <div class="grid g3" style="margin-bottom:16px">
    <div class="kpi"><div class="l">${mTR(per)} Bütçesi</div><div class="v">${fmt0(hedef)}</div></div>
    <div class="kpi ${gercek>hedef?'n':'p'}" data-act="goTxCat" data-arg="gider~~${per}-01~${_to}" style="cursor:pointer" title="Dönemin tüm giderlerini aç"><div class="l">Gerçekleşen Gider ↗</div><div class="v">${fmt0(gercek)}</div></div>
-   <div class="kpi a"><div class="l">Kalan Bütçe</div><div class="v">${fmt0(hedef-gercek)}</div><div class="s">Kullanım: %${hedef?(gercek/hedef*100).toFixed(1):0}</div></div>
+   <div class="kpi a"><div class="l">Kalan Bütçe</div><div class="v">${fmt0(hedef-gercek)}</div><div class="s">Kullanım: %${hedef?Math.max(0,gercek/hedef*100).toFixed(1):0}</div></div>
   </div>
   ${gelirList.length?`<div class="card"><h2>🎯 Ciro Hedefi — ${mTR(per)}</h2>
   ${gelirList.map(b=>{
-    const g2=s.byCatG[b.cat]||0;const pct2=Math.min(100,g2/(+b.amount||1)*100);
+    const g2=Math.max(0,s.byCatG[b.cat]||0);const pct2=Math.min(100,Math.max(0,g2/(+b.amount||1)*100));   /* v52 */
     const beklenen2=+b.amount*paceK;const geride=g2<beklenen2*0.95;
     return `<div class="hb"><div class="hbT"><span><b>${esc(b.cat)}</b> ${geride?'<span class="chip w">Hedefin gerisinde</span>':g2>=+b.amount?'<span class="chip p">Hedef aşıldı 🎉</span>':'<span class="chip g">Yolunda</span>'}</span>
      <b>${fmt0(g2)} / ${fmt0(b.amount)} <button class="btn sm gh" data-act="budgetForm" data-arg="${b.id}">✎</button><button class="btn sm gh" data-act="del" data-arg="budget~${b.id}">🗑</button></b></div>
@@ -5175,7 +5410,7 @@ function rBudget(){
   }).join('')}</div>`:''}
   <div class="card"><h2>Kategori Bazlı Bütçe Takibi — ${mTR(per)}</h2>
   ${list.length? list.map(b=>{
-    const g=s.byCat[b.cat]||0;const pct=Math.min(100,g/(+b.amount||1)*100);const asim=g>+b.amount;
+    const g=Math.max(0,s.byCat[b.cat]||0);const pct=Math.min(100,Math.max(0,g/(+b.amount||1)*100));const asim=g>+b.amount;   /* v52 */
     const beklenen=+b.amount*paceK;const hizli=!asim&&g>beklenen*1.1;
     return `<div class="hb"><div class="hbT"><span><span data-act="goTxCat" data-arg="gider~${esc(b.cat)}~${per}-01~${_to}" style="cursor:pointer" title="Bu kategorinin dönem işlemlerini aç"><b>${esc(b.cat)} ↗</b></span> ${asim?'<span class="chip n">Bütçe aşıldı!</span>':hizli?'<span class="chip w">Hızlı gidiyor — gün-orantılı beklenen '+fmt0(beklenen)+'</span>':''}</span>
      <b>${fmt0(g)} / ${fmt0(b.amount)} <button class="btn sm gh" data-act="budgetForm" data-arg="${b.id}">✎</button><button class="btn sm gh" data-act="del" data-arg="budget~${b.id}">🗑</button></b></div>
@@ -5273,13 +5508,13 @@ function coSheets(co,pre){
  /* v41: eskiden bu toplamlar transfer (xfer) ve stok maliyeti (COGS) satırlarını da içeriyordu;
     Excel'deki "Toplam Gelir/Gider" ile uygulamadaki rakam tutmuyordu. Artık ekranla birebir aynı. */
  const _kz=t=>!(t.xfer||t.src==='stok'||t.type==='virman');
- const gelirToplam=txnsSorted.filter(t=>t.type==='gelir'&&_kz(t)).reduce((s,t)=>s+n(t.amount),0);
- const giderToplam=txnsSorted.filter(t=>t.type==='gider'&&_kz(t)).reduce((s,t)=>s+n(t.amount),0);
+ const gelirToplam=txnsSorted.filter(t=>txYon(t)==='gelir'&&_kz(t)).reduce((s,t)=>s+txImzali(t),0);   /* v52: kontra */
+ const giderToplam=txnsSorted.filter(t=>txYon(t)==='gider'&&_kz(t)).reduce((s,t)=>s+txImzali(t),0);   /* v52: kontra */
  txRows.push([]);
  const TOPGELIR_ROW=N_TX+3, TOPGIDER_ROW=N_TX+4, NET_ROW=N_TX+5;
  const _kzF=(tur)=>'=SUMIFS('+xlRange('G',2,N_TX)+','+xlRange('B',2,N_TX)+','+xlStr(tur)+','+xlRange('L',2,N_TX)+','+xlStr('Evet')+')';
- txRows.push(['Toplam Gelir (kâr/zarara giren)', FX(N_TX?_kzF('Gelir'):'=0', gelirToplam)]);
- txRows.push(['Toplam Gider (kâr/zarara giren)', FX(N_TX?_kzF('Gider'):'=0', giderToplam)]);
+ txRows.push(['Toplam Gelir (kâr/zarara giren · TÜM ZAMANLAR)', FX(N_TX?_kzF('Gelir'):'=0', gelirToplam)]);   /* v52: dönem rakamı değil */
+ txRows.push(['Toplam Gider (kâr/zarara giren · TÜM ZAMANLAR)', FX(N_TX?_kzF('Gider'):'=0', giderToplam)]);   /* v52 */
  txRows.push(['Net', FX('=B'+TOPGELIR_ROW+'-B'+TOPGIDER_ROW, gelirToplam-giderToplam)]);
  sheets.push(xSheet(NM.tx, txRows));
 
@@ -7009,6 +7244,66 @@ function integrityChecks(){
   S.fixedLogs.filter(function(l){ if(l.deletedAt||!canAccessCo(l.co)||!l.fixedId)return false; var x=S.fixed.find(function(k){return k.id===l.fixedId;}); return !x||!!x.deletedAt; }));
  A('Carisi silinmiş cari hareketi','Hareketin bağlı carisi silinmiş — hiçbir ekstrede görünmez ama bazı toplamlara girer.','cari',
   S.cariTxns.filter(function(t){ if(t.deletedAt||!canAccessCo(t.co)||!t.cariId)return false; var x=S.cari.find(function(k){return k.id===t.cariId;}); return !x||!!x.deletedAt; }));
+ /* ==================== v52: VERİ SAĞLIĞI BEKÇİLERİ ====================
+    Hepsi "toplam gelir yanlış" şikâyetinin sessiz sebepleri. Denetim ekranı 26
+    bekçinin tamamını BAĞ KOPUKLUĞU üzerine kurmuştu; sayısal/biçimsel bozukluk
+    hiç bakılmıyordu. */
+ (function(){ /* tutarı sayı olmayan kayıt — tek bir tanesi rapor toplamını sıfırlıyordu */
+  var bad=[];
+  [['txns','amount'],['cariTxns','amount'],['cardTxns','amount'],['staffTxns','amount'],
+   ['fixedLogs','amount'],['cheques','tutar'],['posEntries','gross']].forEach(function(p){
+   (S[p[0]]||[]).forEach(function(r){
+    if(r.deletedAt||!canAccessCo(r.co))return;
+    var v=r[p[1]];
+    if(v===undefined||v===null||v==='')return;
+    if(typeof v!=='number'||!isFinite(v))bad.push(r);
+   });
+  });
+  A('Tutarı sayı olmayan kayıt','Kaydın tutarı metin ya da bozuk bir değer. Bu kayıtlar rapor toplamlarının DIŞINDA kalır — "Toplam Gelir" olduğundan düşük çıkar ve bazı ekranlarda "NaN" görünür. Kaydı açıp tutarı yeniden girin.','tx',bad);
+ })();
+ (function(){ /* tarihi geçersiz kayıt — HER döneme sızıyordu */
+  var bad=[];
+  ['txns','cariTxns','cardTxns','staffTxns'].forEach(function(k){
+   (S[k]||[]).forEach(function(r){
+    if(r.deletedAt||!canAccessCo(r.co))return;
+    if(!gunGecerli(r.date))bad.push(r);
+   });
+  });
+  A('Tarihi geçersiz kayıt','Kaydın tarihi boş ya da gün biçiminde değil. Böyle bir kayıt hiçbir rapor dönemine girmez (eskiden tam tersine HER dönemde sayılıyordu). Kaydı açıp tarihi düzeltin.','tx',bad);
+ })();
+ (function(){ /* şirketi tanımsız kayıt — hiçbir raporda yok ama bazı listelerde var */
+  var ok={};(COMPANIES||[]).forEach(function(c){ok[c.id]=1;});ok['merkez']=1;
+  var bad=(S.txns||[]).filter(function(t){return !t.deletedAt&&!ok[t.co];});
+  A('Şirketi tanımsız kayıt','Kaydın bağlı olduğu şirket bilinmiyor (eski yedek ya da silinmiş şirket). Hiçbir şirket raporunda ve grup toplamında görünmez — para sessizce kaybolur.','tx',bad);
+ })();
+ (function(){ /* mükerrer kayıt kimliği — toplam çift sayar, bulut eşitlemesinde kayıt kaybolur */
+  var bad=[];
+  ['txns','cariTxns','cardTxns','staffTxns','posEntries'].forEach(function(k){
+   var gor={};
+   (S[k]||[]).forEach(function(r){
+    /* v52: yetki kapısı yoktu — başka şirketin tutarı ve açıklaması yetkisiz
+       kullanıcıya sızıyordu. id'siz ve silinmiş kayıtlar da yanlış pozitif veriyordu. */
+    if(!r||!r.id||r.deletedAt||!canAccessCo(r.co))return;
+    if(gor[r.id])bad.push(r); else gor[r.id]=1;
+   });
+  });
+  A('Mükerrer kayıt kimliği','Aynı kimliğe sahip birden fazla kayıt var. Toplamlar çift sayabilir ve bulut eşitlemesinde kayıtlardan biri sessizce kaybolabilir. Bu kayıtlardan birini silip yeniden girin.','tx',bad);
+ })();
+ (function(){ /* aynı POS girişi için iki gelir — o günün tüm cirosu iki kez */
+  var g={},bad=[];
+  (S.txns||[]).forEach(function(t){
+   if(t.deletedAt||t.type!=='gelir'||!t.posEId||!canAccessCo(t.co))return;
+   (g[t.posEId]=g[t.posEId]||[]).push(t);
+  });
+  Object.keys(g).forEach(function(k){ if(g[k].length>1)bad=bad.concat(g[k].slice(1)); });
+  A('Aynı POS girişi için iki gelir kaydı','Bir POS girişinin geliri iki kez yazılmış — o günün cirosu iki kez sayılıyor. Fazla kaydı silin; POS girişi ve banka bakiyesi bozulmaz.','tx',bad);
+ })();
+ (function(){ /* grup içi para hareketi gelir sayılmış */
+  var bad=(S.txns||[]).filter(function(t){
+   return !t.deletedAt&&t.ic&&!t.xfer&&!t.kontra&&t.type==='gelir'&&canAccessCo(t.co);
+  });
+  A('Grup içi para hareketi gelir sayılmış','Grup içi (merkez / şirketler arası) işlem olarak işaretli ama transfer bayrağı taşımadığı için ciroya giriyor. Grup içi para aktarımı gelir değildir — grup konsolide cirosu şişer.','tx',bad);
+ })();
  /* v51: EKSTRE ekranı taksit planını kart hareketinden türetir; gider raporu ise
     S.txns'teki taksit kayıtlarını okur. Bir taksit kaydının tarihi/tutarı elle
     değiştirilir ya da grubun TAMAMI silinirse iki ekran sessizce çelişir:
@@ -7242,7 +7537,7 @@ function exportTxCsv(){
  var accN=function(id){var x=S.accounts.find(function(k){return k.id===id;});return x?x.name:'';};
  var q=function(v){v=String(v==null?'':v);return '"'+v.replace(/"/g,'""')+'"';};
  var rows=[['Tarih','Tür','Kategori','Hesap','Tutar','KDV %','Belge No','Açıklama','Ekleyen','Kâr/Zarara Dahil'].join(';')];
- list.forEach(function(t){rows.push([t.date,t.type==='gelir'?(t.xfer?'Transfer (giriş)':'Gelir'):t.type==='gider'?(t.xfer?'Transfer (çıkış)':'Gider'):'Virman',q(t.cat||''),q(accN(t.accId)||(t.src==='card'?'Kredi kartı':t.src==='merkez'?'🏛 Merkez':t.src==='merkez-kart'?'🏛 Merkez kartı':'')),String(+t.amount).replace('.',','),t.vat||'',q(t.doc||''),q(t.desc||''),q(t.createdBy||''),txKZ(t)?'Evet':'Hayır'].join(';'));});
+ list.forEach(function(t){rows.push([t.date,t.type==='gelir'?(t.xfer?'Transfer (giriş)':'Gelir'):t.type==='gider'?(t.xfer?'Transfer (çıkış)':'Gider'):'Virman',q(t.cat||''),q(accN(t.accId)||(t.src==='card'?'Kredi kartı':t.src==='merkez'?'🏛 Merkez':t.src==='merkez-kart'?'🏛 Merkez kartı':'')),String(txAmt(t)).replace('.',','),t.vat||'',q(t.doc||''),q(t.desc||''),q(t.createdBy||''),(t.kontra?'Kontra (karşı tarafı azaltır)':(txKZ(t)?'Evet':'Hayır'))].join(';'));});
  var blob=new Blob(['﻿'+rows.join('\r\n')],{type:'text/csv;charset=utf-8'});
  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lole-islemler-'+(coName(CO)||'').replace(/\s+/g,'-')+'-'+todayISO()+'.csv';document.body.appendChild(a);a.click();a.remove();
  try{logAudit('CSV dışa aktarım',list.length+' kayıt');}catch(e){}
@@ -7588,7 +7883,7 @@ function onarXfer(i){
  if(!r||!INTEG_XFER_FIX[r.title]){toast('Onarılacak bulgu bulunamadı — listeyi yenileyin');return;}
  var items=(r.items||[]).filter(function(t){return t&&!t.deletedAt&&!t.xfer&&t.type!=='virman';});
  if(!items.length){toast('Düzeltilecek kayıt kalmamış');return;}
- var gel=items.filter(function(t){return t.type==='gelir';}).reduce(function(a,t){return a+ +t.amount;},0);
+ var gel=items.filter(function(t){return txYon(t)==='gelir';}).reduce(function(a,t){return a+txImzali(t);},0);   /* v52 */
  var gid=items.filter(function(t){return t.type==='gider';}).reduce(function(a,t){return a+ +t.amount;},0);
  uiConfirm(items.length+' kayıt "transfer" olarak işaretlenecek. Bunlar merkez aktarımı / ortak sermayesi gibi para hareketleridir; '+
   'GELİR ya da GİDER değildirler. İşlemden sonra kâr/zarar tablosundan '+fmt0(gel)+' gelir ve '+fmt0(gid)+' gider düşecek — '+
@@ -8104,7 +8399,12 @@ function merkezDagitimForm(init){
     var icId=nid(),mc=merkezCari(x.c.id),cmc=coMerkezCari(x.c.id),mctId=nid();
     pushRec(S.cariTxns,{id:mctId,co:'merkez',cariId:mc.id,type:'borc',amount:x.pay,date:tarih,
      desc:'Genel yönetim gideri payı ('+mTR(per)+')',nakit:'',accId:'',ic:true,icId:icId,allocPeriod:per});
+    /* v52 DENETİM: bu kayıt merkezin kendi giderini NÖTRLEMEK için var, gerçek bir
+       gelir değil. `gelir` sayıldığı için MERKEZ ve GRUP cirosu dağıtılan tutar kadar
+       şişiyordu (net kâr doğru, ciro ve ciroya bölünen tüm oranlar yanlış).
+       `kontra:true` ile artık gideri azaltır — net aynı kalır, ciro şişmez. */
     pushRec(S.txns,{id:nid(),co:'merkez',type:'gelir',date:tarih,amount:x.pay,accId:'',src:'merkez-dagitim',
+     kontra:true,
      cat:'Genel Yönetim Dağıtımı',desc:'◀ '+x.c.name+' payı ('+mTR(per)+') — merkez gideri devredildi',
      ic:true,icId:icId,allocPeriod:per,cariId:mc.id,cariTxnId:mctId});
     pushRec(S.txns,{id:nid(),co:x.c.id,type:'gider',date:tarih,amount:x.pay,accId:'',src:'merkez-dagitim',
@@ -9803,7 +10103,7 @@ function accFlow30(a){
  var from=addDays(todayISO(),-29),into=0,out=0;
  S.txns.forEach(function(t){
   if(t.deletedAt||t.date<from)return;
-  if(t.accId===a.id){ if(t.type==='gelir')into+=+t.amount; else if(t.type==='gider')out+=+t.amount;
+  if(t.accId===a.id){ if(t.type==='gelir')into+=txAmt(t); else if(t.type==='gider')out+=txAmt(t);   /* v52 */
    else if(t.type==='virman')out+=+t.amount; }
   else if(t.accId2===a.id&&t.type==='virman')into+=+t.amount;
  });
@@ -10430,6 +10730,12 @@ function ekstreTablodanSatirlar(rows,esle,tur){
     if(yon!=='giris'){yon='giris';uyari.push('Bu satır İADE gibi görünüyor — kart borcunu düşürecek, kontrol edin');}
    }
   }else if(EKSTRE_VIRMAN.test(ac)){ yon='virman'; uyari.push('Virman/kart ödemesi olabilir — gelir-gider sayılmaz'); }
+  /* v52: hesaba GİREN ama gelir OLMAYAN para (kredi kullandırımı, vergi iadesi,
+     grup içi transfer, kendi hesapları arası aktarım...) sahte ciro üretiyordu */
+  else if(yon==='giris'&&(EKSTRE_GELIR_DEGIL.test(ac)||ekstreGrupIci(ac))){
+   yon='virman';
+   uyari.push('Bu giriş GELİR gibi görünmüyor (kredi / iade / grup içi / kendi hesabınız) — kâr-zarara girmez olarak işaretlendi, yanlışsa yönü değiştirin');
+  }
   /* v49 DENETİM: tahmin edilmiş sütunlardan gelen satır ASLA otomatik işaretli gelmez */
   if(esle.tahmin)uyari.push('Sütunlar tahmin edildi — tutar ve yönü doğrulayın');
 
@@ -10640,7 +10946,49 @@ function ekstreYon(v){
 /* v49: gercek ekstrelerde "KREDI KARTI BORC ODEMESI", "K.KARTI ODEME", "VIRMAN-EFT"
    gibi yaziliyor; onceki kalip yalnizca birebir "kart borcu odeme" ariyordu.
    Kalip NORMALLESTIRILMIS metne uygulanir (trNorm). */
-var EKSTRE_VIRMAN_K=/virman|hesaplar arasi|hesaplarim arasi|kendi hesab|kredi kart[a-z]* .*odem|k\.?kart[a-z]* .*odem|kart borc[a-z]* odem|kkb odem|kmh kapama|kart ekstre odem|otomatik odeme talimati kart/;
+/* v52 DENETİM: bu kalıp yalnızca birkaç ifadeyi tanıyordu; gerçek banka ekstrelerinde
+   GELİR OLMAYAN girişlerin büyük kısmı kaçıp "Diğer Gelir" olarak ciroya yazılıyordu —
+   kredi kullandırımı (borç!), vergi/KDV iadesi, iade gelen havale, grup şirketlerinden
+   gelen para, kendi hesapları arası aktarım, vadeli hesap dönüşü, döviz/altın bozumu,
+   teminat çözülmesi, ortak sermayesi... Bir restoranın cirosunu katlarına çıkarabilir. */
+var EKSTRE_VIRMAN_K=/virman|hesaplar arasi|hesaplarim arasi|hesap arasi|kendi hesab|araci hesap|kredi kart[a-z]* .*odem|k\.?kart[a-z]* .*odem|kart borc[a-z]* odem|kkb odem|kmh kapama|kart ekstre odem|otomatik odeme talimati kart/;
+/* Banka hesabına GİREN ama gelir OLMAYAN para — virman (kâr/zarar dışı) sayılır */
+/* v52 DENETİM: kalıptaki tek kelimeler ("sermaye", "mahsup", "ortaktan", "rotatif",
+   "teminat iade") FİRMA ADLARINA takılıp gerçek satış tahsilatını kâr/zarar dışına
+   atıyordu ("HAVALE - SERMAYE İNŞAAT LTD"). Artık bu kelimeler BANKA TERİMİ olarak,
+   satır başına ya da bir ayraçtan sonra çapalanır; firma adının içinde geçmesi yetmez. */
+var EKSTRE_GELIR_DEGIL_K=new RegExp([
+ 'kredi kullandirim','kredi kullanim','ticari kredi kullan','spot kredi kullan',
+ 'kmh kullanim','kmh limit','kredili mevduat',
+ 'vergi iadesi','kdv iadesi','bsmv iade','stopaj iade','gib iade',
+ 'odenmeyen [a-z ]*iade','avans iadesi','havale iadesi','eft iadesi',
+ 'teminat cozul','bloke cozul','blokaj cozul',
+ 'vadeli hesaptan','vadesiz hesaba','vadeliden','vadesizden','vadeli mevduat','mevduat geri',
+ 'doviz alim satim','altin hesabindan','arbitraj','kur farki aktarim',
+ 'hesaba aktarim','hesabima aktarim','kendi hesabima','hesaplar arasi aktarim',
+ 'yanlis islem duzelt','duzeltme alacak','iptal alacak',
+ /* satır başına / ayraçtan sonra çapalı banka terimleri */
+ '(?:^|[-–—:|] *)(?:sermaye (?:girisi|artirimi|odemesi|koyma)|ortak sermayesi|ortaktan (?:gelen|sermaye)|mahsup (?:aktarim|islem|kayd|alacak)|rotatif kredi|teminat iadesi|iade gelen havale|iade gelen eft)\\b'
+].join('|'));
+var EKSTRE_GELIR_DEGIL={test:function(v){return EKSTRE_GELIR_DEGIL_K.test(trNorm(v));}};
+/* Grup şirketlerinden / ortaktan gelen para da gelir değildir — isim eşleşmesiyle */
+function ekstreGrupIci(ac){
+ /* v52 DENETİM: çıplak 'merkez' anahtarı "ALIŞVERİŞ MERKEZİ", "MERKEZ ECZANESİ" gibi
+    gerçek müşterileri grup içi sayıyordu. Artık yalnız TAM şirket/ortak adları,
+    kelime sınırına çapalı ve en az 6 harf. */
+ try{
+  var n=trNorm(ac);
+  var adlar=(COMPANIES||[]).map(function(c){return trNorm(c.name);}).concat(['lole merkez']);
+  (S.partners||[]).forEach(function(p){if(p.name)adlar.push(trNorm(p.name));});
+  return adlar.some(function(a){
+   if(!a||a.length<6)return false;
+   var i=n.indexOf(a);
+   if(i<0)return false;
+   var onc=i>0?n.charAt(i-1):' ', son=(i+a.length<n.length)?n.charAt(i+a.length):' ';
+   return !/[a-z0-9]/.test(onc)&&!/[a-z0-9]/.test(son);
+  });
+ }catch(e){return false;}
+}
 var EKSTRE_VIRMAN={test:function(v){return EKSTRE_VIRMAN_K.test(trNorm(v));}};
 /* v51 DENETİM (KRİTİK): EKSTRE_VIRMAN kalıbı BANKA ekstresi için yazılmıştı ama
    KART ekstresine de uygulanıyordu. Kart ekstresindeki "KREDİ KARTI AİDAT ÖDEMESİ",
@@ -10657,31 +11005,82 @@ var EKSTRE_KART_IADE={test:function(v){return EKSTRE_KART_IADE_K.test(trNorm(v))
    o da TUM defteri bastan tariyordu. 2.000 satir x 20.000 kayit = 40 milyon
    karsilastirma ve bu her yeniden cizimde tekrarlaniyordu. Artik tek gecisli indeks. */
 var _ekMukIdx=null;
+/* v52 DENETİM (KRİTİK): mükerrer anahtarı "aynı gün + kuruşu kuruşuna aynı tutar"dı.
+   Bu, en sık rastlanan çifte sayımı YAPISAL OLARAK hiç yakalayamıyordu:
+     • POS geliri BRÜT tutarla ve SATIŞ gününe yazılır; banka ekstresinde aynı para
+       NET tutarla ve VALÖR gününde görünür → tutar da tarih de farklı.
+     • Aynı ekstre bir kez fotoğraftan (98.000,00), bir kez Excel'den (98.000,01)
+       okunursa 1 kuruş fark koruma duvarını yıkar.
+     • Sütun eşlemesi ikinci seferde "Valör" sütununu tarih sanırsa tüm tarihler kayar.
+   Artık indeks TARİH PENCERESİ (±3 gün) ve TUTAR TOLERANSI (±%0,5, en az 1 ₺) ile
+   aranır; POS girişlerinin brüt VE net tutarları da indekse eklenir. */
+var EK_MUK_GUN=3, EK_MUK_ORAN=0.005;
 function ekstreMukIndeks(hedef,tur){
- var m={};
+ var L=[];
  var arr=(tur==='kart')?S.cardTxns:S.txns;
  var alan=(tur==='kart')?'cardId':'accId';
  for(var i=0;i<arr.length;i++){
   var x=arr[i];
-  if(x.co!==CO||x.deletedAt||x[alan]!==hedef||!x.date)continue;
-  var k=x.date+'|'+Math.round((+x.amount||0)*100);
-  if(!m[k])m[k]={id:x.id,desc:x.desc||x.cat||''};
+  if(x.co!==CO||x.deletedAt||x[alan]!==hedef||!gunGecerli(x.date))continue;
+  var a=+x.amount; if(!isFinite(a)||a<=0)continue;
+  L.push({id:x.id,d:x.date,a:a,desc:x.desc||x.cat||'',kaynak:''});
  }
- return m;
+ if(tur!=='kart'){
+  /* POS girişleri: para bu hesaba valör gününde net olarak geçer; defterdeki gelir
+     kaydı ise brüt ve satış günüdür. İki tutarı da ekle ki ekstre satırı eşleşsin. */
+  (S.pos||[]).forEach(function(p){
+   if(p.co!==CO||p.deletedAt||p.accId!==hedef)return;
+   (S.posEntries||[]).forEach(function(e){
+    if(e.posId!==p.id||e.deletedAt)return;
+    var vd=(e.settleDate&&gunGecerli(e.settleDate))?e.settleDate:e.date;
+    if(!gunGecerli(vd))return;
+    var br=+e.gross||0, nt=+e.net||0;
+    if(nt>0)L.push({id:e.id,d:vd,a:nt,desc:'POS: '+(p.name||'')+' net ('+dTR(e.date)+' satışı)',kaynak:'pos'});
+    if(br>0&&Math.abs(br-nt)>0.009)L.push({id:e.id,d:vd,a:br,desc:'POS: '+(p.name||'')+' brüt ('+dTR(e.date)+' satışı)',kaynak:'pos'});
+   });
+  });
+ }
+ return L;
 }
-/* ---------- mükerrer kontrolü: aynı gün + aynı tutar zaten var mı ---------- */
+function _ekGunFark(a,b){
+ try{return Math.abs((new Date(a+'T00:00:00')-new Date(b+'T00:00:00'))/86400000);}catch(e){return 999;}
+}
+/* ---------- mükerrer kontrolü: yakın gün + yakın tutar zaten var mı ---------- */
 function ekstreMukerrer(sat,hedef,tur){
  try{
-  var t=Math.round((+sat.tutar||0)*100);
-  if(!t||!sat.tarih)return null;
-  if(_ekMukIdx)return _ekMukIdx[sat.tarih+'|'+t]||null;   /* v49: hazir indeks */
-  if(tur==='kart'){
-   var v=S.cardTxns.filter(function(x){return x.co===CO&&!x.deletedAt&&x.cardId===hedef&&x.date===sat.tarih&&Math.round(+x.amount*100)===t;})[0];
-   return v?{id:v.id,desc:v.desc||v.cat||''}:null;
+  var a=+sat.tutar||0;
+  if(!(a>0)||!gunGecerli(sat.tarih))return null;
+  var L=_ekMukIdx||ekstreMukIndeks(hedef,tur);
+  if(!L||!L.length)return null;
+  var tol=Math.max(1,a*EK_MUK_ORAN), enIyi=null, enIyiP=1e9;
+  for(var i=0;i<L.length;i++){
+   var x=L[i];
+   if(Math.abs(x.a-a)>tol)continue;
+   var gf=_ekGunFark(x.d,sat.tarih);
+   if(gf>EK_MUK_GUN)continue;
+   var puan=gf*1000+Math.abs(x.a-a);
+   if(puan<enIyiP){enIyiP=puan;enIyi={id:x.id,desc:x.desc,gun:gf,fark:Math.round((x.a-a)*100)/100,kaynak:x.kaynak||''};}
   }
-  var w=S.txns.filter(function(x){return x.co===CO&&!x.deletedAt&&x.accId===hedef&&x.date===sat.tarih&&Math.round(+x.amount*100)===t;})[0];
-  return w?{id:w.id,desc:w.desc||w.cat||''}:null;
+  return enIyi;
  }catch(e){return null;}
+}
+/* Aynı YÜKLEME PARTİSİ içinde aynı satırın iki kez bulunması — defterde karşılığı
+   olmadığı için eski indeks bunu hiç görmüyordu (aynı ekstrenin PDF'i ve Excel'i
+   birlikte seçilirse ya da iki fotoğraf sayfası çakışırsa oluşur). */
+function ekstrePartiMukerrer(){
+ var g={},n=0;
+ (EKSTRE.satirlar||[]).forEach(function(s2,i){
+  var a=+s2.tutar||0;
+  if(!(a>0)||!gunGecerli(s2.tarih))return;
+  var k=s2.tarih+'|'+Math.round(a*100)+'|'+(s2.yon||'')+'|'+trNorm(s2.aciklama||'').slice(0,40);
+  if(g[k]!==undefined){
+   g[k]++;
+   s2.partiMuk=g[k];          /* kaçıncı kez göründüğü (2, 3, ...) */
+   if(!s2.mukOnay)s2.sec=false;
+   n++;
+  }else{ g[k]=1; delete s2.partiMuk; }
+ });
+ return n;
 }
 /* Açıklamadan kategori tahmini — kullanıcı önizlemede değiştirebilir */
 var EKSTRE_IPUCU=[
@@ -10786,6 +11185,10 @@ function ekstreAISatirEkle(j,kaynak,tur){
    else if(yon==='virman'){ yon='cikis'; uyari.push('Kart ekstresinde virman olmaz — harcama varsayıldı, kontrol edin'); }
   }
   else if(EKSTRE_VIRMAN.test(ac)){ yon='virman'; uyari.push('Virman/kart ödemesi olabilir — gelir-gider sayılmaz'); }
+  else if(yon==='giris'&&(EKSTRE_GELIR_DEGIL.test(ac)||ekstreGrupIci(ac))){   /* v52 */
+   yon='virman';
+   uyari.push('Bu giriş GELİR gibi görünmüyor (kredi/iade/grup içi/kendi hesabınız) — kâr-zarara girmez olarak işaretlendi, yanlışsa yönü değiştirin');
+  }
   if(!tarih&&s.tarih) uyari.push('Tarih okunamadı ('+String(s.tarih).slice(0,20)+') — elle girin');
   EKSTRE.satirlar.push({
    sec:tutar>0&&!!tarih&&!uyari.length, tarih:tarih, aciklama:ac,
@@ -10940,10 +11343,12 @@ function ekstreOnizle(hata){
  var _kartEk=(EKSTRE.tur==='kart');
  var _etCikis=_kartEk?'− Harcama (kart borcu artar)':'− Çıkış (gider)';
  var _etGiris=_kartEk?'+ Ödeme / iade (kart borcu azalır)':'+ Giriş (gelir)';
- var giris=0,cikis=0,secili=0,muk=0;
+ var giris=0,cikis=0,secili=0,muk=0,posMuk=0;
  _ekMukIdx=ekstreMukIndeks(EKSTRE.hedef,EKSTRE.tur);   /* v49: tek sefer kur */
+ var _partiMuk=ekstrePartiMukerrer();                  /* v52: parti içi mükerrer */
  EKSTRE.satirlar.forEach(function(s,i){
   s.muk=ekstreMukerrer(s,EKSTRE.hedef,EKSTRE.tur);
+  if(s.muk&&s.muk.kaynak==='pos')posMuk++;
   /* v48 DENETIM (YUKSEK): her yeniden cizimde isaret ZORLA kaldiriliyordu - kullanici
      bir satiri "evet bu gercekten ayri bir kayit" diye isaretlese bile baska bir
      satiri duzeltince isaret sessizce kayboluyor, gercek kayit hic girilmiyordu. */
@@ -10958,7 +11363,15 @@ function ekstreOnizle(hata){
    '<td><input type="checkbox" data-ek="sec" data-i="'+i+'"'+(s.sec?' checked':'')+'></td>'+
    '<td><input type="date" data-ek="tarih" data-i="'+i+'" value="'+esc(s.tarih)+'" style="min-width:130px"></td>'+
    '<td><input type="text" data-ek="aciklama" data-i="'+i+'" value="'+esc(s.aciklama)+'" style="min-width:180px">'+
-     (s.muk?'<div class="tiny" style="color:var(--neg)">\u26a0 Ayn\u0131 g\u00fcn ayn\u0131 tutarda kay\u0131t zaten var: '+esc(s.muk.desc)+' \u2014 ger\u00e7ekten ayr\u0131 bir i\u015flemse kutucu\u011fu i\u015faretleyin</div>':'')+
+     (s.muk?'<div class="tiny" style="color:var(--neg)">\u26a0 '+
+       (s.muk.kaynak==='pos'
+        ?'Bu para zaten POS kayd\u0131ndan gelir yaz\u0131lm\u0131\u015f'
+        :'Kay\u0131t zaten var')+
+       ': '+esc(s.muk.desc)+
+       (s.muk.gun?' ('+s.muk.gun+' g\u00fcn fark':' (ayn\u0131 g\u00fcn')+
+       (s.muk.fark?', tutar fark\u0131 '+fmt0(Math.abs(s.muk.fark)):'')+')'+
+       ' \u2014 ger\u00e7ekten ayr\u0131 bir i\u015flemse kutucu\u011fu i\u015faretleyin</div>':'')+
+     (s.partiMuk?'<div class="tiny" style="color:var(--neg)">\u26a0 Bu sat\u0131r bu y\u00fcklemede '+s.partiMuk+'. kez g\u00f6r\u00fcn\u00fcyor (ayn\u0131 ekstreyi iki dosyadan birden se\u00e7mi\u015f olabilirsiniz) \u2014 i\u015faretlemeyin</div>':'')+
      (s.tutar<=0?'<div class="tiny" style="color:var(--warn)">\u26a0 Tutar okunamad\u0131 \u2014 elle girin</div>':'')+uy+
      '<div class="tiny" style="color:var(--ink3)">\ud83d\udcf7 '+esc(s.ham)+' <i>(bu metin de yapay zeka okumas\u0131d\u0131r \u2014 foto\u011frafla kar\u015f\u0131la\u015ft\u0131r\u0131n)</i></div></td>'+
    '<td><select data-ek="yon" data-i="'+i+'">'+
@@ -10978,7 +11391,13 @@ function ekstreOnizle(hata){
   '<div class="mh"><h3>📷 Okunan Satırlar — onayınız bekleniyor</h3><button data-act="closeModal" style="font-size:20px;color:var(--ink3)">✕</button></div>'+
   '<div class="mb">'+
    '<p class="tiny" style="margin-bottom:8px"><b>'+esc(ekstreHedefAd())+'</b> · '+EKSTRE.okunan+'/'+EKSTRE.dosya+' dosya okundu · '+
-    EKSTRE.satirlar.length+' satır bulundu'+(muk?' · <b style="color:var(--neg)">'+muk+' mükerrer şüphesi (işareti kaldırıldı)</b>':'')+'</p>'+
+    EKSTRE.satirlar.length+' satır bulundu'+(muk?' · <b style="color:var(--neg)">'+muk+' mükerrer şüphesi (işareti kaldırıldı)</b>':'')+
+    (_partiMuk?' · <b style="color:var(--neg)">'+_partiMuk+' satır bu yüklemede tekrarlanıyor</b>':'')+'</p>'+
+   /* v52: POS ile çakışma en sık görülen çifte sayım — ayrı ve açık bir bantla söylenir */
+   (posMuk?'<div class="nvWarn"><div>⚠ <b>'+posMuk+' satır, POS kayıtlarınızdan zaten gelir yazılmış paraya denk geliyor.</b> '+
+     'POS cirosu satış gününde brüt tutarla gelir yazılır; banka ekstresinde aynı para komisyon düşülmüş net tutarla ve valör gününde görünür. '+
+     'Bu satırları işaretlerseniz <b>aynı ciro iki kez sayılır</b>. Banka hesabının bakiyesi POS aktarımıyla zaten güncelleniyor — '+
+     'bu satırları işaretlemeden bırakın.</div></div>':'')+
    /* v49 DENETIM: hata metinleri kacissiz basiliyordu; AI/sunucu kaynakli mesaj HTML tasiyabilir */
    (hata&&hata.length?'<div class="nvWarn"><div>⚠ '+esc(hata.join(' · '))+'</div></div>':'')+
    ekstreEslemeCubugu()+ekstreAtlananKart()+
@@ -11095,8 +11514,10 @@ function ekstreKaydet(){
       cardTxnId:cdid,cat:s.kat,desc:aciklama+' (kredi kartı)',ekstre:1,ekstreGrup:icId});
     }else if(_iade){
      ensureCat('gelir','Gider İadesi');
+     /* v52: iade bir GELİR değil, gider iptalidir. `kontra:true` ile gideri azaltır;
+        eskiden ciroya giriyor ve "Toplam Gelir"i şişiriyordu (net kâr doğruydu). */
      yTx.push({id:nid(),co:eco,type:'gelir',date:s.tarih,amount:s.tutar,accId:'',src:'card',
-      cardTxnId:cdid,cat:'Gider İadesi',iade:1,
+      cardTxnId:cdid,cat:'Gider İadesi',iade:1,kontra:true,
       desc:aciklama+' (kredi kartı iadesi — gideri geri alır)',ekstre:1,ekstreGrup:icId});
     }
     /* kart ÖDEMESİ (giriş, iade değil) gider/gelir yazmaz — yalnız kart borcunu düşürür */
@@ -11210,6 +11631,12 @@ function veriAc(qs){
  uiInfo('📄 '+bas,html);
 }
 function veriGit(co,kind,id){ closeModal(); konAc(co,kind,id); }
+/* v52: tanımlı şirket kimliği mi */
+function _coTanimli(id){
+ if(!id)return false;
+ if(id==='merkez')return true;
+ try{return (COMPANIES||[]).some(function(c){return c.id===id;});}catch(e){return false;}
+}
 function veriSorgula(q){
  var co=q.co||CO, out=[];
  var defter=q.defter||'tx';
@@ -11217,7 +11644,10 @@ function veriSorgula(q){
   (arr||[]).forEach(function(t){
    if(t.deletedAt)return;
    if(co!=='*'&&t.co!==co)return;
-   if(co==='*'&&!canAccessCo(t.co))return;
+   /* v52 DENETİM: `co:'*'` (grup) sorgusunda yalnızca canAccessCo bakılıyordu; süper
+      yönetici için bu her zaman true olduğundan ŞİRKETİ TANIMSIZ kayıtlar listeye
+      giriyor, oysa sumRange onları hiç saymıyordu — KPI ile liste ayrışıyordu. */
+   if(co==='*'&&(!canAccessCo(t.co)||!_coTanimli(t.co)))return;
    var d=t[tarihAlan||'date']||'';
    if(q.from&&d<q.from)return;
    if(q.to&&d>q.to)return;
@@ -11358,6 +11788,9 @@ function chartKopru(adimlar,h){
 }
 /* Yoğunlaşma (Pareto) — ilk N kalem toplamın yüzde kaçını oluşturuyor */
 function paretoOzet(items){
+ /* v52: kontra kalemler NEGATİF gelir; Math.abs onları gider gibi sayıp yoğunlaşma
+    tabanını şişiriyordu. Negatifler elenir, pozitifler üzerinden hesaplanır. */
+ items=(items||[]).filter(function(i){return (+i.value||0)>0;});
  var tot=items.reduce(function(s,i){return s+Math.abs(i.value);},0);
  if(!tot)return null;
  var sirali=items.slice().sort(function(a,b){return Math.abs(b.value)-Math.abs(a.value);});
@@ -12177,4 +12610,493 @@ function katUyariRozeti(){
    (r.e?r.e+' merkez ödemesi gider defterine yazılmamış':'')+'. '+
    '<button class="btn sm" data-act="go" data-arg="katduzelt">🏷 Kategori Düzeltme Merkezi\'ni aç</button></p></div>';
  }catch(err){return '';}
+}
+
+/* ==================== v52: GELİR DENETİMİ ====================
+   Neden var: "Raporlar'da toplam gelir yanlış olabilir mi, çifte kayıt var mı?"
+   Bu ekran o soruyu TAHMİNLE değil, şirketin GERÇEK kayıtlarını tarayarak yanıtlar.
+   Her bulgu için: kaç kayıt, kaç ₺ fazla, neden fazla olduğu ve kayıtların listesi.
+   Hiçbir şey kendiliğinden değişmez — düzeltme kararı kullanıcınındır. */
+
+var gdSekme='hepsi';          /* hepsi | kesin | supheli | veri */
+function setGdSekme(v){gdSekme=v;rGelirDen();}
+var GD_GUN=3, GD_ORAN=0.005;  /* ekstre eşleşme penceresi */
+
+function _gdGun(a,b){try{return Math.abs((new Date(a+'T00:00:00')-new Date(b+'T00:00:00'))/86400000);}catch(e){return 9999;}}
+function _gdYakin(a,b,oran){var t=Math.max(1,Math.abs(a)*(oran||GD_ORAN));return Math.abs(a-b)<=t;}
+function _gdTut(L){return Math.round(L.reduce(function(s,x){return s+Math.abs(+x.amount||0);},0)*100)/100;}
+function _gdAcc(id){try{return accNameOf(id)||'—';}catch(e){return '—';}}
+
+/* Şirketin kâr/zarara giren GELİR kayıtları (sumRange ile AYNI süzgeç) */
+function gdGelirKayitlari(co){
+ return S.txns.filter(function(t){
+  return t.co===co&&t.type==='gelir'&&!t.deletedAt&&!t.xfer&&!t.kontra&&t.src!=='stok';
+ });
+}
+
+/* ---------- 1) AYNI POS GİRİŞİ İÇİN İKİ GELİR (kesin) ---------- */
+function gdPosCift(co){
+ var g={},out=[];
+ S.txns.forEach(function(t){
+  if(t.co!==co||t.deletedAt||t.type!=='gelir'||!t.posEId)return;
+  (g[t.posEId]=g[t.posEId]||[]).push(t);
+ });
+ Object.keys(g).forEach(function(k){
+  if(g[k].length<2)return;
+  var L=g[k].slice().sort(function(a,b){return String(a.createdAt||'')<String(b.createdAt||'')?-1:1;});
+  out=out.concat(L.slice(1));   /* ilki kalır, fazlalar bulgudur */
+ });
+ return out;
+}
+
+/* ---------- 2) POS AKTARIMI ↔ BANKA EKSTRESİ ÇAKIŞMASI (kesine yakın) ---------- */
+function gdPosEkstre(co){
+ var out=[];
+ var hedefler={};
+ (S.pos||[]).forEach(function(p){
+  if(p.co!==co||p.deletedAt||!p.accId)return;
+  (S.posEntries||[]).forEach(function(e){
+   if(e.posId!==p.id||e.deletedAt)return;
+   var vd=(e.settleDate&&gunGecerli(e.settleDate))?e.settleDate:e.date;
+   if(!gunGecerli(vd))return;
+   (hedefler[p.accId]=hedefler[p.accId]||[]).push({pos:p,e:e,vd:vd});
+  });
+ });
+ gdGelirKayitlari(co).forEach(function(t){
+  if(t.posEId)return;                         /* POS'un kendi kaydı değil */
+  if(!t.accId||!hedefler[t.accId])return;
+  if(!gunGecerli(t.date))return;
+  var a=+t.amount; if(!isFinite(a)||a<=0)return;
+  var es=null;
+  hedefler[t.accId].some(function(h){
+   if(_gdGun(h.vd,t.date)>GD_GUN&&_gdGun(h.e.date,t.date)>GD_GUN)return false;
+   if(_gdYakin(+h.e.net||0,a)||_gdYakin(+h.e.gross||0,a)){es=h;return true;}
+   return false;
+  });
+  if(es)out.push(Object.assign({},t,{_gd:{pos:es.pos.name,tarih:es.e.date,brut:+es.e.gross||0,net:+es.e.net||0}}));
+ });
+ return out;
+}
+
+/* ---------- 3) AYNI YÜKLEME PARTİSİNDE MÜKERRER SATIR (kesin) ---------- */
+function gdPartiCift(co){
+ var g={},out=[];
+ gdGelirKayitlari(co).forEach(function(t){
+  if(!t.ekstreGrup||!gunGecerli(t.date))return;
+  var k=t.ekstreGrup+'|'+t.date+'|'+Math.round((+t.amount||0)*100)+'|'+(t.accId||'');
+  (g[k]=g[k]||[]).push(t);
+ });
+ Object.keys(g).forEach(function(k){ if(g[k].length>1)out=out.concat(g[k].slice(1)); });
+ return out;
+}
+
+/* ---------- 4) İKİ AYRI EKSTRE YÜKLEMESİ ARASINDA MÜKERRER (şüpheli) ---------- */
+/* v52 DENETİM (BAŞARIM): bu kural iç içe döngüyle çalışıyordu — 20.000 kayıtta
+   Raporlar ekranı 107 saniye donuyordu (tam kuadratik). Artık hesap + gün kovalarına
+   indekslenir ve yalnız komşu 7 gün taranır. */
+function _gdGunNo(d){ /* 1970'ten bu yana gün sayısı — Date ayrıştırması olmadan */
+ var y=+d.slice(0,4),m=+d.slice(5,7),g=+d.slice(8,10);
+ return Math.floor(Date.UTC(y,m-1,g)/86400000);
+}
+function gdEkstreCift(co){
+ var L=gdGelirKayitlari(co).filter(function(t){return gunGecerli(t.date)&&isFinite(+t.amount)&&!t.posEId;});
+ var kova={};
+ L.forEach(function(t){
+  var k=(t.accId||'')+'|'+_gdGunNo(t.date);
+  (kova[k]=kova[k]||[]).push(t);
+ });
+ var out=[],kul={};
+ L.forEach(function(a){
+  if(!a.ekstre||kul[a.id])return;
+  var gn=_gdGunNo(a.date), ac=(a.accId||'');
+  for(var off=-GD_GUN;off<=GD_GUN;off++){
+   var liste=kova[ac+'|'+(gn+off)];
+   if(!liste)continue;
+   for(var i=0;i<liste.length;i++){
+    var b=liste[i];
+    if(b.id===a.id||kul[b.id])continue;
+    if(a.ekstreGrup&&b.ekstreGrup&&a.ekstreGrup===b.ekstreGrup)continue;  /* parti içi ayrı bulgu */
+    if(!_gdYakin(+a.amount,+b.amount))continue;
+    kul[a.id]=1;kul[b.id]=1;
+    out.push(Object.assign({},a,{_gd:{es:b}}));
+    return;
+   }
+  }
+ });
+ return out;
+}
+
+/* ---------- 5) AYNI CARİ HAREKETİNE BAĞLI İKİ NAKİT KAYDI (kesin) ---------- */
+function gdCariTxnCift(co){
+ var g={},out=[];
+ S.txns.forEach(function(t){
+  if(t.co!==co||t.deletedAt||!t.cariTxnId)return;
+  (g[t.cariTxnId]=g[t.cariTxnId]||[]).push(t);
+ });
+ Object.keys(g).forEach(function(k){ if(g[k].length>1)out=out.concat(g[k].slice(1)); });
+ return out;
+}
+
+/* ---------- 6) SATIŞ GELİRİ + AYRICA TAHSİLAT (şüpheli) ---------- */
+function gdSatisTahsilat(co){
+ var L=gdGelirKayitlari(co).filter(function(t){return t.cariId&&gunGecerli(t.date)&&isFinite(+t.amount);});
+ var satisByCari={};   /* v52 başarım: cari bazında indeks */
+ L.forEach(function(t){ if(!t.cariTxnId)(satisByCari[t.cariId]=satisByCari[t.cariId]||[]).push(t); });
+ var out=[],kul={};
+ L.forEach(function(a){
+  if(!a.cariTxnId)return;
+  var aday=satisByCari[a.cariId]; if(!aday)return;
+  for(var i=0;i<aday.length;i++){
+   var b=aday[i];
+   if(kul[b.id])continue;
+   if(_gdGun(a.date,b.date)>90)continue;
+   if(!_gdYakin(+a.amount,+b.amount,0.01))continue;
+   kul[b.id]=1;
+   out.push(Object.assign({},a,{_gd:{es:b}}));
+   return;
+  }
+ });
+ return out;
+}
+
+/* ---------- 7) ÇEK TAHSİLATI + AYRICA SATIŞ GELİRİ (şüpheli) ---------- */
+function gdCekCift(co){
+ var L=gdGelirKayitlari(co).filter(function(t){return gunGecerli(t.date)&&isFinite(+t.amount);});
+ var cekli=L.filter(function(t){return !!t.cekId;});
+ var digeri=L.filter(function(t){return !t.cekId&&!t.posEId;});
+ var out=[],kul={};
+ cekli.forEach(function(a){
+  digeri.some(function(b){
+   if(kul[b.id])return false;
+   if(_gdGun(a.date,b.date)>120)return false;
+   if(!_gdYakin(+a.amount,+b.amount,0.01))return false;
+   kul[b.id]=1;
+   out.push(Object.assign({},a,{_gd:{es:b}}));
+   return true;
+  });
+ });
+ return out;
+}
+
+/* ---------- 8) CİRO SAYILMAMASI GEREKEN KALEMLER (kesin sınıflandırma) ---------- */
+function gdCiroDisi(co){
+ return gdGelirKayitlari(co).filter(function(t){
+  return !!t.staffTxnId || !!t.assetId || t.cat==='Kasa/Banka Farkı' ||
+         t.cat==='Gider İadesi' || t.iade;
+ });
+}
+
+/* ---------- 9) GELİR OLMAYAN EKSTRE GİRİŞLERİ (şüpheli) ---------- */
+function gdGelirDegil(co){
+ return gdGelirKayitlari(co).filter(function(t){
+  if(!t.ekstre)return false;
+  var d=t.desc||'';
+  try{ return EKSTRE_GELIR_DEGIL.test(d)||ekstreGrupIci(d); }catch(e){ return false; }
+ });
+}
+
+/* ---------- 9b) POS GELİRİ + AYRICA SATIŞ FATURASI (şüpheli) ----------
+   POS girişinde cari seçilmemişse gelir kaydı hiçbir cariye bağlanmaz; aynı satış
+   için ayrıca fatura kesildiyse tahakkuk modunda iki kez sayılır. Otomatik
+   eşleştirmek mümkün değil — bulgu olarak gösterilir. */
+function gdPosFatura(co){
+ var out=[];
+ var fat=(S.cariTxns||[]).filter(function(c){
+  return c.co===co&&!c.deletedAt&&c.fatura&&c.type==='borc'&&gunGecerli(c.date)&&isFinite(+c.amount);
+ });
+ if(!fat.length)return out;
+ gdGelirKayitlari(co).forEach(function(t){
+  if(!t.posEId||t.cariTxnId)return;             /* cariye bağlıysa mutabakat hallediyor */
+  if(!gunGecerli(t.date))return;
+  var a=+t.amount; if(!isFinite(a)||a<=0)return;
+  var es=null;
+  fat.some(function(ff){
+   if(_gdGun(ff.date,t.date)>7)return false;
+   if(!_gdYakin(a,+ff.amount,0.01))return false;
+   es=ff;return true;
+  });
+  if(es)out.push(Object.assign({},t,{_gd:{es:{date:es.date,desc:'Fatura '+(es.faturaNo||'')+' — '+(es.desc||''),amount:es.amount}}}));
+ });
+ return out;
+}
+
+/* ---------- 10) GRUP İÇİ İŞARETLİ AMA GELİR SAYILAN (kesin) ---------- */
+function gdGrupIci(co){
+ return gdGelirKayitlari(co).filter(function(t){return !!t.ic;});
+}
+
+/* ---------- 11) AYNI GÜN + AYNI TUTAR + AYNI KATEGORİ, İKİ KAYIT (şüpheli) ---------- */
+function gdAyniGun(co){
+ var g={},out=[];
+ gdGelirKayitlari(co).forEach(function(t){
+  if(!gunGecerli(t.date)||!isFinite(+t.amount))return;
+  if(t.posEId||t.ekstreGrup)return;                       /* bunlar ayrı bulgularda */
+  var k=t.date+'|'+Math.round((+t.amount||0)*100)+'|'+(t.cat||'')+'|'+(t.accId||'');
+  (g[k]=g[k]||[]).push(t);
+ });
+ Object.keys(g).forEach(function(k){ if(g[k].length>1)out=out.concat(g[k].slice(1)); });
+ return out;
+}
+
+/* ---------- VERİ SAĞLIĞI ---------- */
+function gdVeriSagligi(co){
+ var ok={},hepsi=[];
+ (COMPANIES||[]).forEach(function(c){ok[c.id]=1;});ok['merkez']=1;
+ var bozukTutar=[],bozukTarih=[],yetimCo=[],ciftId=[];
+ var gor={};
+ S.txns.forEach(function(t){
+  if(t.deletedAt)return;
+  if(!canAccessCo(t.co))return;        /* v52: başka şirketin verisi sızmasın */
+  if(!t.id){return;}
+  if(gor[t.id])ciftId.push(t); else gor[t.id]=1;
+  if(!ok[t.co])yetimCo.push(t);
+  if(t.co!==co)return;
+  var a=+t.amount;
+  if(!isFinite(a))bozukTutar.push(t);
+  if(!gunGecerli(t.date))bozukTarih.push(t);
+ });
+ return {bozukTutar:bozukTutar,bozukTarih:bozukTarih,yetimCo:yetimCo,ciftId:ciftId};
+}
+
+/* ================= BULGU LİSTESİ ================= */
+function gdBulgular(co){
+ var B=[];
+ var ek=function(o){ if(o.kayitlar&&o.kayitlar.length){o.tutar=_gdTut(o.kayitlar);B.push(o);} };
+
+ ek({id:'posCift',sinif:'kesin',baslik:'Aynı POS girişi için iki gelir kaydı',
+  neden:'Bir POS girişinin geliri iki kez yazılmış. Genellikle gelir kaydı silinip elle “Geçti ✓” denildikten sonra eski kaydın çöp kutusundan geri getirilmesiyle ya da iki cihazın aynı anda otomatik geçirmesiyle olur.',
+  cozum:'Fazla kaydı silin — POS girişi ve banka bakiyesi bozulmaz.',
+  kayitlar:gdPosCift(co)});
+
+ ek({id:'posEkstre',sinif:'kesin',baslik:'POS parası hem POS kaydından hem banka ekstresinden gelir yazılmış',
+  neden:'POS cirosu satış gününde BRÜT tutarla gelir yazılır. Aynı para bankaya komisyon düşülmüş NET tutarla ve valör gününde geçer. Banka ekstresi yüklenirken o satır da gelir yazılmışsa aynı ciro iki kez sayılır. Tutar ve tarih farklı olduğu için eski mükerrer uyarısı bunu yakalayamıyordu.',
+  cozum:'Ekstreden gelen (📷 etiketli) kaydı silin. POS aktarımı banka bakiyesini zaten güncelliyor.',
+  kayitlar:gdPosEkstre(co)});
+
+ ek({id:'partiCift',sinif:'kesin',baslik:'Aynı ekstre yüklemesinde aynı satır iki kez',
+  neden:'Tek bir yüklemede aynı satır iki kez kaydedilmiş — aynı ekstrenin hem PDF’i hem Excel’i birlikte seçilmiş ya da iki fotoğraf sayfası çakışmış olabilir.',
+  cozum:'Fazla kaydı silin ya da o yüklemeyi “Son ekstre yüklemeleri”nden geri alıp yeniden yükleyin.',
+  kayitlar:gdPartiCift(co)});
+
+ ek({id:'ekstreCift',sinif:'supheli',baslik:'İki ayrı ekstre yüklemesinde aynı para',
+  neden:'Aynı hesapta, 3 gün içinde, tutarı birbirine çok yakın iki gelir kaydı var ve en az biri ekstre yüklemesinden geliyor. Aynı dönem iki kez yüklenmiş olabilir (bir kuruş ya da bir gün fark eski korumayı atlatıyordu).',
+  cozum:'İki kaydı karşılaştırın; aynı işlemse birini silin.',
+  kayitlar:gdEkstreCift(co)});
+
+ ek({id:'cariCift',sinif:'kesin',baslik:'Aynı cari hareketine bağlı iki nakit kaydı',
+  neden:'Bir cari hareketi için iki ayrı kâr/zarar kaydı var. Aynı hareket iki kez nakde dönüştürülmüş.',
+  cozum:'Fazla kaydı silin — cari bakiyesi değişmez.',
+  kayitlar:gdCariTxnCift(co)});
+
+ ek({id:'satisTahsilat',sinif:'supheli',baslik:'Satış geliri yazılmış, ayrıca tahsilatı da gelir yazılmış',
+  neden:'Aynı cari için biri tahsilata bağlı biri bağlı olmayan, tutarı eşleşen iki gelir kaydı var. Satış bir kez gelir yazıldıktan sonra parası geldiğinde tekrar gelir yazılırsa aynı ciro iki kez sayılır. (Satış yalnızca cariye borç olarak — veresiye — yazıldıysa tahsilattaki gelir DOĞRUDUR; bu yüzden şüpheli olarak işaretlenir.)',
+  cozum:'Satış kaydını kontrol edin: satış zaten gelir yazılmışsa tahsilat kaydını “sadece cari kaydı (veresiye)” hâline getirin ya da fazla geliri silin.',
+  kayitlar:gdSatisTahsilat(co)});
+
+ ek({id:'cekCift',sinif:'supheli',baslik:'Çek tahsilatı yazılmış, ayrıca aynı tutarda satış geliri var',
+  neden:'Bir çek tahsilatı gelir yazılmış ve aynı tutarda, çeke bağlı olmayan başka bir gelir kaydı daha var. Satış bir kez, çek tahsilatı ikinci kez sayılmış olabilir.',
+  cozum:'Hangisinin gerçek satış olduğunu belirleyip diğerini silin.',
+  kayitlar:gdCekCift(co)});
+
+ ek({id:'posFatura',sinif:'supheli',baslik:'POS geliri yazılmış, aynı tutarda satış faturası da var',
+  neden:'POS girişinde cari seçilmediği için gelir kaydı hiçbir cariye bağlanmamış; aynı satış için ayrıca fatura kesilmişse TAHAKKUK modunda iki kez sayılır. (Nakit modunda yalnızca POS geliri sayılır, sorun yoktur.)',
+  cozum:'POS girişini açıp ilgili cariyi seçin — böylece tahsilat faturaya bağlanır ve tahakkukta çift sayılmaz.',
+  kayitlar:gdPosFatura(co)});
+
+ ek({id:'grupIci',sinif:'kesin',baslik:'Grup içi para hareketi gelir sayılmış',
+  neden:'Bu kayıtlar grup içi işlem olarak işaretli (merkez/şirketler arası) ama transfer bayrağı taşımadığı için ciroya giriyor. Grup içi para aktarımı gelir değildir.',
+  cozum:'Ayarlar → Sistem Tutarlılık Denetimi → “🔧 Transfer olarak işaretle” ile düzeltilebilir. Tutarlar ve bakiyeler değişmez, yalnızca kâr/zarardan çıkar.',
+  kayitlar:gdGrupIci(co)});
+
+ ek({id:'gelirDegil',sinif:'supheli',baslik:'Banka ekstresinden gelen ama gelir olmayan girişler',
+  neden:'Açıklamasına göre bu girişler satış geliri değil: kredi kullandırımı (borç), vergi/KDV iadesi, iade gelen havale, grup şirketinden gelen para, kendi hesaplarınız arası aktarım, vadeli hesap dönüşü, teminat çözülmesi gibi. Ekstre yüklenirken gelir olarak yazılmışlar.',
+  cozum:'Her birini açıp “⇄ Transfer (kâr/zarara girmez)” olarak işaretleyin ya da silin.',
+  kayitlar:gdGelirDegil(co)});
+
+ ek({id:'ciroDisi',sinif:'supheli',baslik:'Ciro olmayan kalemler gelir içinde',
+  neden:'Personel kesintisi tahsilatı, demirbaş satışı, kasa/banka sayım farkı ve gider iadesi gibi kalemler “Toplam Gelir”e giriyor. Bunlar satış cirosu değildir; Personel/Ciro, marj gibi oranları bozarlar.',
+  cozum:'Çifte sayım değildir — ciro oranlarını yorumlarken bu tutarı düşün. İstersek bu kalemleri ciro dışında ayrı göstermeyi ekleyebiliriz.',
+  kayitlar:gdCiroDisi(co)});
+
+ ek({id:'ayniGun',sinif:'supheli',baslik:'Aynı gün, aynı tutar, aynı kategori iki gelir kaydı',
+  neden:'Elle iki kez girilmiş olabilir. Gerçekten iki ayrı satış da olabilir — bu yüzden şüpheli.',
+  cozum:'Açıklamalarını karşılaştırın; aynı işlemse birini silin.',
+  kayitlar:gdAyniGun(co)});
+
+ return B;
+}
+
+function rGelirDen(){
+ _navHi('rep');
+ if(CO==='grup'){
+  document.getElementById('main').innerHTML=topbar('🔍 Gelir Denetimi','')+
+   '<div class="card"><div class="empty"><b>Önce bir şirket seçin</b>Gelir denetimi tek tek şirketlerin kâr/zarar defteri üzerinde çalışır.</div></div>';
+  return;
+ }
+ if(!can('rapor.disa')&&!can('kayit.duzenle')){
+  document.getElementById('main').innerHTML=topbar('🔍 Gelir Denetimi','')+
+   '<div class="card"><div class="empty"><b>Bu ekran için yetkiniz yok</b></div></div>';
+  return;
+ }
+ var from=repRange.from,to=repRange.to;
+ var s=sumRange(CO,from,to);
+ var B=gdBulgular(CO);
+ var V=gdVeriSagligi(CO);
+
+ /* dönem içine düşen bulgu tutarları — KPI dönemle tutarlı olsun */
+ var donemde=function(L){return L.filter(function(t){return gunGecerli(t.date)&&t.date>=from&&t.date<=to;});};
+ var kesin=0,supheli=0;
+ B.forEach(function(b){
+  var d=_gdTut(donemde(b.kayitlar));
+  b.donemTutar=d;
+  if(b.id==='ciroDisi'){supheli+=d;return;}   /* sınıflandırma, çifte sayım değil */
+  if(b.sinif==='kesin')kesin+=d; else supheli+=d;
+ });
+ var duzeltilmis=Math.round((s.gelir-kesin)*100)/100;
+
+ var gos=B.filter(function(b){
+  if(gdSekme==='kesin')return b.sinif==='kesin';
+  if(gdSekme==='supheli')return b.sinif==='supheli';
+  if(gdSekme==='veri')return false;
+  return true;
+ });
+
+ var veriN=V.bozukTutar.length+V.bozukTarih.length+V.yetimCo.length+V.ciftId.length;
+
+ document.getElementById('main').innerHTML= topbar('🔍 Gelir Denetimi — '+esc(coName(CO)),
+  '<button class="btn gh" data-act="go" data-arg="rep">📊 Raporlara dön</button>')+
+
+ '<div class="card" style="margin-bottom:12px;background:var(--acc-soft);padding:12px 14px"><p class="tiny" style="margin:0">'+
+  '🔍 <b>Bu ekran hiçbir şeyi değiştirmez</b> — '+esc(coName(CO))+' şirketinin <b>'+dTR(from)+' — '+dTR(to)+'</b> dönemindeki '+
+  'gelir kayıtlarını tarayıp çifte sayım ve sınıflandırma hatası arar. '+
+  '<b>Kesin</b> bulgular aynı paranın iki kez yazıldığı, teknik olarak doğrulanmış durumlardır. '+
+  '<b>Şüpheli</b> bulgular gerçekten iki ayrı işlem de olabilir — karar sizin.'+
+ '</p></div>'+
+
+ '<div class="grid g4" style="margin-bottom:12px">'+
+  '<div class="kpi"><div class="l">Raporda Toplam Gelir</div><div class="v">'+fmt0(s.gelir)+'</div><div class="s">'+dTR(from)+' — '+dTR(to)+'</div></div>'+
+  '<div class="kpi '+(kesin>0.005?'n':'p')+'"><div class="l">Kesin Fazla</div><div class="v">'+fmt0(kesin)+'</div><div class="s">'+(s.gelir?('cironun %'+(kesin/s.gelir*100).toFixed(1)+'\'i'):'—')+'</div></div>'+
+  '<div class="kpi '+(supheli>0.005?'w':'p')+'"><div class="l">Şüpheli</div><div class="v">'+fmt0(supheli)+'</div><div class="s">incelemeniz gerekir</div></div>'+
+  '<div class="kpi a"><div class="l">Düzeltilmiş Ciro</div><div class="v">'+fmt0(duzeltilmis)+'</div><div class="s">kesin fazlalar düşülmüş</div></div>'+
+ '</div>'+
+
+ (s.bozuk||s.tarihsiz?'<div class="card" style="border-left:4px solid var(--neg);padding:10px 14px;margin-bottom:12px"><p class="tiny" style="margin:0">'+
+   '⛔ <b>Rapor rakamı eksik hesaplanıyor:</b> '+
+   (s.bozuk?s.bozuk+' kaydın tutarı sayı olarak okunamadı':'')+(s.bozuk&&s.tarihsiz?' · ':'')+
+   (s.tarihsiz?s.tarihsiz+' kaydın tarihi geçersiz (hiçbir döneme girmiyor)':'')+
+   '. Bu kayıtlar toplamın DIŞINDA kaldı. Aşağıdaki “🧪 Veri Sağlığı” sekmesinden listeyi görebilirsiniz.</p></div>':'')+
+
+ (!B.length&&!veriN
+  ? '<div class="card" style="border-left:4px solid var(--pos)"><h2>✓ Çifte sayım bulgusu yok</h2>'+
+    '<p class="tiny" style="margin:0">'+esc(coName(CO))+' şirketinin bu dönemdeki '+fmt0(s.gelir)+' gelirinde '+
+    'çifte kayıt ya da sınıflandırma hatası bulunamadı. Taranan kurallar: POS çifte geliri, POS↔banka ekstresi çakışması, '+
+    'ekstre mükerrerleri, cari hareketine bağlı çift kayıt, satış+tahsilat çifti, çek çifti, grup içi para, '+
+    'gelir olmayan banka girişleri, ciro dışı kalemler ve aynı gün/tutar tekrarları.</p></div>'
+  : seg([['hepsi','Tümü ('+B.length+')'],['kesin','⛔ Kesin ('+B.filter(function(b){return b.sinif==='kesin';}).length+')'],
+         ['supheli','⚠ Şüpheli ('+B.filter(function(b){return b.sinif==='supheli';}).length+')'],
+         ['veri','🧪 Veri Sağlığı ('+veriN+')']],gdSekme,'setGdSekme')+
+    (gdSekme==='veri'? gdVeriKart(V) : gos.map(gdBulguKart).join('')||'<div class="card"><div class="empty"><b>Bu sınıfta bulgu yok</b></div></div>'));
+}
+
+function gdBulguKart(b){
+ var renk=b.sinif==='kesin'?'var(--neg)':'var(--warn)';
+ var ilk=b.kayitlar.slice(0,5);
+ return '<div class="card" style="border-left:4px solid '+renk+'">'+
+  '<h2>'+(b.sinif==='kesin'?'⛔':'⚠')+' '+esc(b.baslik)+' '+
+   '<span class="tiny">'+b.kayitlar.length+' kayıt · '+fmt0(b.tutar)+
+   (Math.abs(b.tutar-(b.donemTutar||0))>0.005?' (dönem içi '+fmt0(b.donemTutar||0)+')':'')+'</span></h2>'+
+  '<p class="tiny" style="margin-bottom:8px">'+esc(b.neden)+'</p>'+
+  '<p class="tiny" style="margin-bottom:10px"><b>Ne yapmalı:</b> '+esc(b.cozum)+'</p>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Açıklama</th><th>Hesap</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+
+  ilk.map(function(t){
+   return '<tr><td class="tiny">'+dTR(t.date)+'</td>'+
+    '<td class="tiny">'+esc(String(t.desc||t.cat||'').slice(0,70))+
+     (t._gd&&t._gd.pos?'<div class="tiny" style="color:var(--ink3)">POS: '+esc(t._gd.pos)+' · '+dTR(t._gd.tarih)+' satışı · brüt '+fmt0(t._gd.brut)+' / net '+fmt0(t._gd.net)+'</div>':'')+
+     (t._gd&&t._gd.es?'<div class="tiny" style="color:var(--ink3)">eşleşen kayıt: '+dTR(t._gd.es.date)+' · '+esc(String(t._gd.es.desc||t._gd.es.cat||'').slice(0,50))+' · '+fmt0(t._gd.es.amount)+'</div>':'')+
+     '</td>'+
+    '<td class="tiny">'+esc(_gdAcc(t.accId))+'</td>'+
+    '<td class="num">'+fmt0(t.amount)+'</td>'+
+    '<td class="rowact"><button class="btn sm gh" data-act="gdKayitAc" data-arg="'+esc(t.id)+'" title="Bu kaydı İşlem Geçmişi’nde aç">↗</button></td></tr>';
+  }).join('')+'</tbody></table></div>'+
+  (b.kayitlar.length>5?'<div class="cardBtns" style="margin-top:8px"><button class="btn gh" data-act="gdListe" data-arg="'+esc(b.id)+'">📄 '+b.kayitlar.length+' kaydın tamamını listele</button></div>':'')+
+  '</div>';
+}
+
+function gdVeriKart(V){
+ var blok=function(baslik,L,aciklama,alanFn){
+  if(!L.length)return '';
+  return '<div class="card" style="border-left:4px solid var(--neg)"><h2>⛔ '+esc(baslik)+' <span class="tiny">'+L.length+' kayıt</span></h2>'+
+   '<p class="tiny" style="margin-bottom:8px">'+esc(aciklama)+'</p>'+
+   '<div style="overflow-x:auto"><table><thead><tr><th>Tür</th><th>Tarih</th><th>Açıklama</th><th class="num">Tutar</th></tr></thead><tbody>'+
+   L.slice(0,20).map(function(t){
+    return '<tr><td class="tiny">'+esc(t.type||'')+'</td><td class="tiny">'+esc(alanFn?alanFn(t):String(t.date||'(yok)'))+'</td>'+
+     '<td class="tiny">'+esc(String(t.desc||t.cat||'').slice(0,60))+'</td>'+
+     '<td class="num tiny">'+esc(String(t.amount))+'</td></tr>';
+   }).join('')+'</tbody></table></div>'+
+   (L.length>20?'<p class="tiny">İlk 20 kayıt gösteriliyor.</p>':'')+'</div>';
+ };
+ var h=blok('Tutarı sayı olarak okunamayan kayıtlar',V.bozukTutar,
+   'Bu kayıtların tutar alanı metin ya da bozuk. Rapor toplamına HİÇ girmiyorlar — "Toplam Gelir" olduğundan düşük çıkar. Kaydı açıp tutarı yeniden girin.')+
+  blok('Tarihi geçersiz kayıtlar',V.bozukTarih,
+   'Tarih alanı boş ya da gün biçiminde değil (YYYY-AA-GG olmalı). Bu kayıtlar hiçbir rapor dönemine girmiyor. Kaydı açıp tarihi düzeltin.')+
+  blok('Şirketi tanımsız kayıtlar',V.yetimCo,
+   'Bu kayıtların bağlı olduğu şirket bilinmiyor (eski yedek ya da silinmiş şirket). Hiçbir şirket raporunda ve grup toplamında görünmüyorlar.',
+   function(t){return String(t.date||'(yok)')+' · şirket: '+String(t.co||'(yok)');})+
+  blok('Mükerrer kayıt kimliği',V.ciftId,
+   'Aynı kimliğe sahip birden fazla kayıt var. Toplamlar çift sayabilir ve bulut eşitlemesinde kayıtlardan biri kaybolabilir. Bu kayıtlardan birini silip yeniden girin.');
+ return h||'<div class="card" style="border-left:4px solid var(--pos)"><h2>✓ Veri sağlığı temiz</h2><p class="tiny" style="margin:0">Tutarı, tarihi, şirketi ya da kimliği bozuk kayıt bulunmuyor.</p></div>';
+}
+
+function gdKayitAc(id){
+ var t=S.txns.find(function(x){return x.id===id;});
+ if(!t){toast('Kayıt bulunamadı');return;}
+ txFilter={type:'',cat:'',from:t.date,to:t.date,kz:'',q:String(t.amount||'')};
+ go('tx');
+ toast('İşlem listesi bu kaydın gününe ve tutarına göre süzüldü');
+}
+
+function gdListe(bid){
+ var B=gdBulgular(CO).filter(function(b){return b.id===bid;})[0];
+ if(!B){toast('Bulgu bulunamadı');return;}
+ uiInfo((B.sinif==='kesin'?'⛔ ':'⚠ ')+B.baslik,
+  '<p class="tiny" style="margin-bottom:8px">'+esc(B.kayitlar.length)+' kayıt · toplam <b>'+fmt0(B.tutar)+'</b></p>'+
+  '<div style="overflow:auto;max-height:56vh"><table><thead><tr><th>Tarih</th><th>Açıklama</th><th>Hesap</th><th>Kategori</th><th class="num">Tutar</th></tr></thead><tbody>'+
+  B.kayitlar.slice(0,400).map(function(t){
+   return '<tr><td class="tiny">'+dTR(t.date)+'</td><td class="tiny">'+esc(String(t.desc||'').slice(0,70))+'</td>'+
+    '<td class="tiny">'+esc(_gdAcc(t.accId))+'</td><td class="tiny">'+esc(t.cat||'')+'</td>'+
+    '<td class="num">'+fmt0(t.amount)+'</td></tr>';
+  }).join('')+'</tbody></table></div>'+
+  (B.kayitlar.length>400?'<p class="tiny">İlk 400 kayıt gösteriliyor.</p>':''));
+}
+
+/* Raporlar ekranının tepesinde uyarı rozeti */
+var _gdRozetCache={};
+function gdRozetTazele(){_gdRozetCache={};}
+function gdUyariRozeti(){
+ try{
+  if(CO==='grup')return '';
+  /* v52 DENETİM (BAŞARIM): rozet her rRep() çizimde koşuyor. Çok büyük defterlerde
+     tarama render'i kilitlemesin diye eşik konur — Gelir Denetimi ekranı elle açılır. */
+  if(S.txns.length>30000)return '';
+  var k=CO+'|'+S.txns.length+'|'+repRange.from+'|'+repRange.to;
+  var r=_gdRozetCache[k];
+  if(r===undefined){
+   var B=gdBulgular(CO);
+   var kesin=0,n=0;
+   B.forEach(function(b){
+    if(b.id==='ciroDisi')return;
+    var d=b.kayitlar.filter(function(t){return gunGecerli(t.date)&&t.date>=repRange.from&&t.date<=repRange.to;});
+    if(!d.length)return;
+    n+=d.length;
+    if(b.sinif==='kesin')kesin+=_gdTut(d);
+   });
+   r={n:n,kesin:kesin};
+   _gdRozetCache={};_gdRozetCache[k]=r;
+  }
+  if(!r.n)return '';
+  return '<div class="card" style="border-left:4px solid '+(r.kesin>0.005?'var(--neg)':'var(--warn)')+';margin-bottom:12px;padding:10px 14px">'+
+   '<p class="tiny" style="margin:0">'+(r.kesin>0.005?'⛔':'⚠')+' <b>Gelir rakamı şişmiş olabilir:</b> bu dönemde '+r.n+' kayıt çifte sayım şüphesi taşıyor'+
+   (r.kesin>0.005?', bunların <b>'+fmt0(r.kesin)+'</b>\'si kesin fazla':'')+'. '+
+   '<button class="btn sm" data-act="go" data-arg="gelirden">🔍 Gelir Denetimi\'ni aç</button></p></div>';
+ }catch(e){return '';}
 }
