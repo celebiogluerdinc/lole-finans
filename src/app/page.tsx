@@ -26,15 +26,31 @@ export default function AppPage() {
     let cancelled = false;
     const sb = getSupabase();
 
-    (async () => {
+    // v54: Supabase jetonu yenilenirken getSession() KISA SURE null donebiliyor.
+    // Eskiden bu an /login'e atiyor, kullanici bir anda giris ekraninda buluyordu
+    // ("sayfa kendiliginden yenilendi" sikayetinin bir sebebi buydu). Artik
+    // birkac kez, artan araliklarla tekrar denenir; gercekten oturum yoksa gidilir.
+    const oturumAl = async () => {
+      for (let i = 0; i < 4; i++) {
+        const { data } = await sb.auth.getSession();
+        if (data.session) return data.session;
+        if (cancelled) return null;
+        await new Promise((r) => setTimeout(r, 300 + i * 500));
+      }
       const { data } = await sb.auth.getSession();
+      return data.session ?? null;
+    };
+
+    (async () => {
+      const session = await oturumAl();
       if (cancelled) return;
 
-      if (!data.session) {
+      if (!session) {
         setStatus('nosession');
         router.replace('/login');
         return;
       }
+      const data = { session };
 
       // Zaten başlatıldıysa tekrar başlatma (aynı sekmede yeniden mount'a karşı)
       if (window.__loleBooted) {
