@@ -32,6 +32,9 @@ h1,h2,.kpi .v,.num,.amt{font-variant-numeric:tabular-nums}
 @keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 @keyframes pop{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:none}}
 .main>*{animation:up .45s cubic-bezier(.2,.7,.3,1) both}
+/* v54: bulut eşitlemesi ekranı yeniden çizdiğinde giriş animasyonu TEKRAR oynamasın
+   — kullanıcı her dakika kartların yeniden belirdiğini görüyordu. */
+.main.noAnim>*{animation:none!important}
 .main>*:nth-child(2){animation-delay:.04s}.main>*:nth-child(3){animation-delay:.08s}
 .main>*:nth-child(4){animation-delay:.12s}.main>*:nth-child(5){animation-delay:.16s}
 .main>*:nth-child(n+6){animation-delay:.2s}

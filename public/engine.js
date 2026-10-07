@@ -315,9 +315,29 @@ function isAuthErr(e){
   return /jwt|token|expired|unauthor|not authenticated|permission denied|row-level|rls|pgrst301|pgrst302|invalid claim|api key/.test(t);
  }catch(x){return false;}
 }
+/* v54: `localStorage.clear()` uygulamanın KENDİ tercihlerini de siliyordu —
+   "beni hatırla" izi, kaldığınız yer kaydı ve yarım kalan form taslağı dahil.
+   Geçici bir yetki hatası bu yüzden çalışmanızı da götürüyordu. Artık yalnızca
+   oturum anahtarları temizlenir, `lole.` ile başlayanlar korunur. */
+function kfOturumTemizle(){
+ var kor={};
+ try{
+  for(var i=0;i<localStorage.length;i++){
+   var k=localStorage.key(i);
+   /* v54b: form taslağı tutar/açıklama/cari içerir — ortak bir bilgisayarda
+      oturum düştükten sonra düz metin kalmasın. Kaldığım yer kaydı korunur. */
+   if(k&&k.indexOf('lole.')===0&&k.indexOf('lole.formTaslak.')!==0)kor[k]=localStorage.getItem(k);
+  }
+ }catch(e){}
+ try{
+  localStorage.clear();
+  Object.keys(kor).forEach(function(k){try{localStorage.setItem(k,kor[k]);}catch(e){}});
+ }catch(e){}
+ return Object.keys(kor).length;
+}
 function reAuth(){ /* oturumu kapat, giriş ekranına dön */
  try{ if(window.__loleBoot&&window.__loleBoot.signOut){window.__loleBoot.signOut();return;} }catch(e){}
- try{ localStorage.clear(); }catch(e){}
+ try{ kfOturumTemizle(); }catch(e){}
  try{ location.reload(); }catch(e){}
 }
 function showAuthBanner(){
@@ -521,6 +541,7 @@ async function restoreFromDateAsk(dateISO){
  },{danger:1,title:'Yedeği Geri Yükle',yes:'Evet, Geri Yükle'});
 }
 var saveErr=false;
+var saveSayac=0;  // v54b: her save() çağrısında artar — "bu form gerçekten kaydetti mi?" sorusunun tek güvenilir cevabı (dirty yapışkandır)
 var dirty=false; // son değişiklik buluta başarıyla yazıldı mı — yalnızca bellekte tutulur, cihaza yazılmaz
 var pendingSaves=0; // hâlâ yanıt bekleyen (veya yeniden denenen) bulut kaydı sayısı
 var lastSaveFailed=false;
@@ -673,6 +694,7 @@ function save(){
  try{gdRozetTazele();}catch(e){}   /* v52: gelir denetimi rozeti önbelleği */
  try{gxRozetTazele();}catch(e){}   /* v53: gider denetimi rozeti önbelleği */
  try{cariFaturaIdxTazele();}catch(e){}  /* v52: cari fatura indeksi */
+ saveSayac++;   /* v54b */
  if(READONLY){try{toast('🔒 Salt-okunur mod — bu değişiklik KAYDEDİLMEDİ');}catch(e){} return;} // v14-H11: eskiden sessizce yutuluyordu, kullanıcı "kaydedildi" toast'ını görüyordu
  dirty=true;
  clearTimeout(saveT);
@@ -690,6 +712,16 @@ async function checkCloudFresh(){
   var h=await withTimeout(window.storage.head(skey(),isTeam()),5000);
   if(!h||!h.updatedAt||h.updatedAt===lastCloudRev){__freshBusy=false;return;}
   if(dirty||pendingSaves>0){ __freshBusy=false; clearTimeout(saveT); saveNow(); return; } // birleştirmeli kayıt öne çekilir
+  /* v54b KRİTİK: açık bir form `dirty` YAPMAZ. `S` değiştirilince formun kaydetme
+     işleyicisi (applyEdit / Object.assign) KOPMUŞ eski nesneye yazıyor; kullanıcı
+     "kaydedildi" görüyor ama değişiklik hiçbir yere gitmiyor. Meşgulken uzak veri
+     HİÇ okunmaz — yalnızca "yeni veri var" rozeti gösterilir, iş bitince alınır. */
+  if(typeof kfMesgulMu==='function'&&kfMesgulMu()){
+   __freshBusy=false;
+   _kfBekleyen=true;
+   try{kfBekleyenRozet(true);}catch(e){}
+   return;
+  }
   var r=await withTimeout(window.storage.get(skey(),isTeam()),8000);
   __freshBusy=false;
   if(!r||!r.value)return;
@@ -698,12 +730,20 @@ async function checkCloudFresh(){
   S=fixState(remote);
   lastCloudRev=r.updatedAt||h.updatedAt;
   lastSavedCore=stateCore();
-  try{ if(CO&&PAGE)go(PAGE); else if(SESSION)renderSelect(); }catch(e){}
-  toast('☁ Veriler başka bir kullanıcının kaydıyla güncellendi');
+  /* v54: eskiden burada go(PAGE) çağrılıyordu — ekran baştan çiziliyor, kaydırma
+     başa atlıyor, kart animasyonları tekrar oynuyor ve Kategori Düzeltme
+     Merkezi'ndeki yarım seçimler siliniyordu. Artık YUMUŞAK yenileme: kaydırma
+     korunur, kullanıcı form/pencere ile meşgulse yenileme işi bitene kadar
+     bekletilir. VERİ yine hemen güncellenir (yukarıda S atandı) — bekletilen
+     yalnızca ekranın yeniden çizilmesidir. */
+  try{ if(CO&&PAGE)kfYumusakYenile(); else if(SESSION)renderSelect(); }catch(e){}
+  toast('☁ Veriler güncellendi (başka bir kullanıcı kaydetti)');
  }catch(e){ __freshBusy=false; }
 }
 setInterval(checkCloudFresh,60000);
-window.addEventListener('focus',function(){setTimeout(checkCloudFresh,400);});
+/* v54: hızlı sekme değişiminde üst üste koşmasın — tek bir gecikmeli çağrı */
+var _freshOdakT=null;
+window.addEventListener('focus',function(){clearTimeout(_freshOdakT);_freshOdakT=setTimeout(checkCloudFresh,700);});
 /* v17: İzole depolama testi — S state'inden bağımsız, ham window.storage API'sini dener ve TAM hatayı gösterir */
 async function testStorage(){
  var out=document.getElementById('storageTestResult');
@@ -853,6 +893,8 @@ document.addEventListener('click',function(e){
  if(typeof fn!=='function')return;
  if(el.tagName==='BUTTON'&&el.getAttribute('type')!=='submit')e.preventDefault();
  var args=el.hasAttribute('data-arg')?el.getAttribute('data-arg').split('~'):[];
+ /* v54: form taslağı kurtarma — hangi eylem bir form açtıysa onu hatırlarız */
+ try{window.__kfSonAct={act:el.getAttribute('data-act'),args:args.slice()};}catch(_){}
  try{fn.apply(null,args);}catch(err){try{toast('Hata: '+err.message);}catch(_){}}
 });
 function a11yPass(){
@@ -1572,7 +1614,12 @@ const PAGES=[
  {id:'task', ic:'check', t:'Görev & Duyuru'},
  {id:'set',  ic:'gear', t:'Ayarlar'}
 ];
-function goSelect(){CO=null;document.getElementById('app').classList.remove('on');document.getElementById('selectScreen').style.display='flex';renderSelect();}
+function goSelect(){
+ /* v54: kullanıcı bilerek şirket listesine döndü — bir sonraki yenilemede
+    eski şirkete zıplamayalım. */
+ try{kaldigimYeriSil();}catch(e){}
+ try{kfTaslakRozet(false);}catch(e){}   /* v54b */
+ CO=null;document.getElementById('app').classList.remove('on');document.getElementById('selectScreen').style.display='flex';renderSelect();}
 function renderSelect(){
  const g=document.getElementById('coGrid');
  let h='';
@@ -1629,7 +1676,14 @@ function enterCo(id){
  document.getElementById('sideCo').textContent=coName(id);
  buildNav();
  try{autoSettlePos();}catch(e){} // B2: şirkete girişte vadesi dolan POS blokajları otomatik işlenir
- go(id==='grup'?'grup':id==='merkez'?'merkez':'dash');
+ /* v54: yenilemeden sonra kaldığınız ekrana dönülür (kyHedefSayfa) */
+ var _hedef=(id==='grup')?'grup':(id==='merkez')?'merkez':'dash';
+ try{ if(typeof kyHedefSayfa==='function')_hedef=kyHedefSayfa(id); }catch(e){}
+ go(_hedef);
+ /* v54b: taslak rozeti şirkete bağlıdır — şirket değişince yeniden değerlendirilir,
+    yoksa başka şirkette girilmiş bir taslak burada "Devam et" ile açılıp kaydın
+    YANLIŞ ŞİRKETE yazılmasına yol açıyordu. */
+ try{kfTaslakRozet(false);formTaslakRozetiGoster();}catch(e){}
 }
 function buildNav(){
  const pages= CO==='grup'
@@ -1664,7 +1718,10 @@ function go(p){
    PAGE='kontrol';
    document.querySelectorAll('[data-p]').forEach(function(b){b.classList.toggle('on',b.dataset.p==='kontrol');});
    rKontrol();updateSaveBadge();
-   try{window.scrollTo(0,0);}catch(e){}try{a11yPass();}catch(e){}
+   /* v54: yumuşak (eşitleme kaynaklı) yenilemede kaydırma başa ATILMAZ */
+   if(typeof _kfYumusak==='undefined'||!_kfYumusak){try{window.scrollTo(0,0);}catch(e){}}
+   try{a11yPass();}catch(e){}
+   try{kyYazGecikmeli();}catch(e){}
    return;
   }
  }
@@ -1676,8 +1733,11 @@ function go(p){
  const R={dash:rDash,ai:rAi,acc:rAcc,tx:rTx,pos:rPos,card:rCard,cari:rCari,staff:rStaff,fixed:rFixed,cek:rCek,stok:rStock,asset:rAsset,budget:rBudget,rep:rRep,gecmis:rGecmis,kontrol:rKontrol,task:rTask,set:rSet,grup:rGrup,merkez:rMerkez,ortak:rOrtak,katduzelt:rKatDuzelt/* v50 */,gelirden:rGelirDen/* v52 */,giderden:rGiderDen/* v53 */};
  (R[p]||rDash)();
  updateSaveBadge();
- try{window.scrollTo(0,0);}catch(e){}
+ /* v54: yumuşak (eşitleme kaynaklı) yenilemede kaydırma başa ATILMAZ — eskiden
+    her dakika ve her sekme dönüşünde sayfa başa zıplıyordu. */
+ if(typeof _kfYumusak==='undefined'||!_kfYumusak){try{window.scrollTo(0,0);}catch(e){}}
  try{a11yPass();}catch(e){}
+ try{kyYazGecikmeli();}catch(e){}   /* v54: kaldığım yer kaydı */
 }
 function topbar(title,btnHtml){
  return `<div class="topbar"><div class="tt"><span class="spine"></span><div style="position:relative">
@@ -1709,6 +1769,9 @@ function parseAmt(v){ // "1.500,75" / "1500.75" / "1500,5" / "1500" / "100.000" 
 }
 function openForm(title,fields,onSubmit,init){
  init=init||{};
+ /* v54: bu formu hangi düğme açtı? Yarım kalan taslağı "Devam et" ile aynı
+    formu yeniden açıp doldurabilmek için kaydedilir. */
+ try{_taslakBaslik=title;_taslakKaynak=(window.__kfSonAct||null);}catch(e){}
  window.__lastFocusEl=document.activeElement; // B6: modal kapaninca odak geri verilir
  modalCb=onSubmit;
  modalFields=[];
@@ -1781,14 +1844,29 @@ function doSubmit(){
   return;
  }
  const cb=modalCb;
+ /* v54b: taslak, `cb` GERÇEKTEN kaydettiyse silinir. İş kuralı reddederse
+    (ör. "Aynı hesaba virman yapılamaz") eskiden modal kapanıyor, taslak da
+    siliniyor ve kullanıcının girdiği her şey yok oluyordu. */
+ var _tsYedek=null;
+ try{_tsYedek=localStorage.getItem(taslakAnah());}catch(e){}
+ var _s0=saveSayac;
+ try{formTaslakSil();}catch(e){}
  closeModal();
  cb(o);
+ try{
+  if(_tsYedek&&saveSayac===_s0){
+   localStorage.setItem(taslakAnah(),_tsYedek);
+   setTimeout(function(){try{formTaslakRozetiGoster();}catch(e){}},250);
+  }
+ }catch(e){}
 }
 function submitModal(e){ if(e&&e.preventDefault)e.preventDefault(); doSubmit(); return false; }
 function closeModal(){
  /* v48 DENETIM: suren ekstre okumasi, modal kapatildiktan sonra bitip ekrani kendiliginden
     geri aciyordu - kullanicinin actigi baska bir form siliniyordu. */
- try{ if(typeof EKSTRE!=='undefined'&&EKSTRE){EKSTRE.iptal=true;} }catch(e){}document.getElementById('modalWrap').classList.remove('on');modalCb=null;modalFields=null;try{if(window.__lastFocusEl&&window.__lastFocusEl.focus&&document.contains(window.__lastFocusEl))window.__lastFocusEl.focus();}catch(e){}window.__lastFocusEl=null;}
+ try{ if(typeof EKSTRE!=='undefined'&&EKSTRE){EKSTRE.iptal=true;} }catch(e){}document.getElementById('modalWrap').classList.remove('on');modalCb=null;modalFields=null;try{if(window.__lastFocusEl&&window.__lastFocusEl.focus&&document.contains(window.__lastFocusEl))window.__lastFocusEl.focus();}catch(e){}window.__lastFocusEl=null;
+ /* v54: pencere kapandı — bekleyen eşitleme varsa şimdi uygula */
+ try{if(typeof _kfBekleyen!=='undefined'&&_kfBekleyen)setTimeout(function(){if(!kfMesgulMu())kfBekleyenUygula();},120);}catch(e){}}
 document.addEventListener('keydown',function(e){ // B6: Escape ile modal kapatma
  if(e.key==='Escape'){var mw=document.getElementById('modalWrap');if(mw&&mw.classList.contains('on')){e.preventDefault();closeModal();}}
 });
@@ -5057,8 +5135,14 @@ function selfTest(){
  if(autoOk){
   document.getElementById('loginScreen').style.display='none';
   document.getElementById('selectScreen').style.display='flex';
-  toast('Hoş geldiniz — '+SESSION.username);
   renderSelect();
+  /* v54: ÇALIŞMA KONFORU — yenilemeden sonra şirket seçimini ve ana sayfayı
+     atlayıp kaldığınız ekrana, süzgeçlerinize ve kaydırma konumunuza dönülür. */
+  try{kfKurulum();}catch(e){}
+  var _devam=false;
+  try{_devam=kaldigimYeriUygula();}catch(e){}
+  if(!_devam)toast('Hoş geldiniz — '+SESSION.username);
+  setTimeout(function(){try{formTaslakRozetiGoster();}catch(e){}},1200);
   setTimeout(weeklyBackupCheck,1500);
  }else{
   if(window.__loleBoot&&window.__loleBoot.signOut)window.__loleBoot.signOut();
@@ -7102,14 +7186,19 @@ async function loginSubmit(){
  document.getElementById('loginScreen').style.display='none';
  document.getElementById('selectScreen').style.display='flex';
  logAudit('Giriş yapıldı','');
- toast('Hoş geldiniz — '+u.username);
  renderSelect();
+ /* v54: elle giriş yolunda da kaldığı yere dönülür */
+ try{kfKurulum();}catch(e){}
+ var _dv=false; try{_dv=kaldigimYeriUygula();}catch(e){}
+ if(!_dv)toast('Hoş geldiniz — '+u.username);
+ setTimeout(function(){try{formTaslakRozetiGoster();}catch(e){}},1200);
 }
 function doLogout(){
  if(window.__loleBoot&&window.__loleBoot.signOut){ try{logAudit('Çıkış yapıldı','');}catch(e){} try{window.__loleBoot.signOut();}catch(e){} return; }
  var m=document.getElementById('coMenu');if(m)m.classList.remove('on');
  if(SESSION)logAudit('Çıkış yapıldı','');
  forgetRemembered(true); // hem kullanıcı kaydındaki hem bu Claude hesabındaki hatırlama izini temizle
+ try{kaldigimYeriSil();formTaslakSil();}catch(e){}   /* v54 */
  SESSION=null;CO=null;
  document.getElementById('app').classList.remove('on');
  document.getElementById('selectScreen').style.display='none';
@@ -7498,6 +7587,18 @@ function integrityChecks(){
   });
   /* v53: metin olsa da Türk biçimli bir tutar artık DOĞRU okunur; burada kalanlar
      gerçekten okunamayan (ya da sıfır/eksi) değerlerdir ve toplamlarda 0 sayılırlar. */
+  /* v54b: kayıt bir şirkete, kullandığı kasa/banka BAŞKA bir şirkete ait olabiliyordu
+     (taslak kurtarma hatasıyla ya da elle). Hiçbir güvenlik ağı bunu görmüyordu:
+     tutar ne o hesaptan düşüyor ne doğru şirketin kârından. */
+  (function(){
+   var capraz=[];
+   (S.txns||[]).forEach(function(t){
+    if(t.deletedAt||!t.accId||!t.co||!canAccessCo(t.co))return;
+    var a=(S.accounts||[]).find(function(x){return x.id===t.accId&&!x.deletedAt;});
+    if(a&&a.co&&a.co!==t.co)capraz.push(t);
+   });
+   A('Başka şirketin hesabına yazılmış kayıt','Kaydın şirketi ile kullandığı kasa/banka hesabının şirketi farklı. Tutar ne o hesaptan düşüyor ne de doğru şirketin kâr/zararına giriyor. Kaydı silip doğru şirkette yeniden girin.','tx',capraz);
+  })();
   A('Tutarı okunamayan kayıt','Kaydın tutar alanı boş, sıfır, eksi ya da okunamayan bir değer. Bu kayıtlar rapor toplamlarında SIFIR sayılır — gelir ya da gider olduğundan düşük çıkar. Kaydı açıp tutarı yeniden girin.','tx',bad);
  })();
  (function(){ /* tarihi geçersiz kayıt — HER döneme sızıyordu */
@@ -14011,4 +14112,413 @@ function gxUyariRozeti(){
    (r.kesin>0.005?', bunların <b>'+fmt0(r.kesin)+'</b>\'si kesin fazla':'')+'. '+
    '<button class="btn sm" data-act="go" data-arg="giderden">🔍 Gider Denetimi\'ni aç</button></p></div>';
  }catch(e){return '';}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v54 — ÇALIŞMA KONFORU
+   Üç ayrı sıkıntıyı çözer:
+    1) Sayfa yenilenince her şey baştan başlıyordu: şirket seçimi, ana sayfa,
+       dönem süzgeçleri sıfır, kaydırma başa. Artık kaldığınız yere dönülür.
+    2) Bulut eşitlemesi her dakika VE her sekme dönüşünde ekranı baştan
+       çiziyordu: kaydırma başa atlıyor, kart animasyonları tekrar oynuyor,
+       Kategori Düzeltme Merkezi'nde yaptığınız seçimler siliniyordu.
+       Artık yumuşak yenileme: kaydırma korunur, siz bir şeyle meşgulken bekler.
+    3) Yarım kalan form girdileri kaybolup gidiyordu. Artık taslak olarak
+       saklanır ve "Devam et" ile formu doldurulmuş halde geri açar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+var KONFOR_SAYFALAR=['dash','ai','acc','tx','pos','card','cari','staff','fixed','cek','stok',
+ 'asset','budget','rep','gecmis','kontrol','task','set','grup','merkez','ortak',
+ 'katduzelt','gelirden','giderden'];
+function kfSayfaGecerli(p){return !!p&&KONFOR_SAYFALAR.indexOf(p)!==-1;}
+/* `_coTanimli` 'grup'u tanımaz (COMPANIES listesinde yoktur) — grup raporunda
+   çalışan kullanıcı her yenilemede şirket seçimine düşüyor ve kaydı siliniyordu. */
+function kfCoTanimli(id){
+ if(id==='grup'||id==='merkez'||id==='ortak')return true;
+ try{return (COMPANIES||[]).some(function(c){return c.id===id;});}catch(e){return false;}
+}
+function kfKullanici(){try{return (SESSION&&(SESSION.id||SESSION.username))||'anon';}catch(e){return 'anon';}}
+var _kfKotaUyarildi=false;
+function kfYaz(anah,deger){
+ try{localStorage.setItem(anah,JSON.stringify(deger));return true;}
+ catch(e){
+  /* Kota dolu ya da tarayıcı depolamayı engelliyor — özellik sessizce ölmesin. */
+  if(!_kfKotaUyarildi){
+   _kfKotaUyarildi=true;
+   try{toast('⚠ Tarayıcı deposu dolu ya da kapalı — "kaldığınız yer" ve form taslağı hatırlanamıyor');}catch(e2){}
+  }
+  return false;
+ }
+}
+function kfOku(anah){try{var s=localStorage.getItem(anah);return s?JSON.parse(s):null;}catch(e){return null;}}
+function kfSil(anah){try{localStorage.removeItem(anah);}catch(e){}}
+/* globals.css'te `html{scroll-behavior:smooth}` var — konum GERİ YÜKLERKEN yumuşak
+   kaydırma işe yaramaz: hedefe varmadan bir sonraki çağrı araya giriyor ve sayfa
+   süzülerek geziniyor. Geri yükleme ANİ olmalı. */
+function kfKaydir(y){
+ /* globals.css'te `html{scroll-behavior:smooth}` var. Konum GERİ YÜKLERKEN yumuşak
+    kaydırma işe yaramaz: hedefe varmadan bir sonraki deneme araya giriyor ve sayfa
+    süzülerek geziniyor. `behavior:'instant'` desteklenmeyen tarayıcıda da ani
+    olsun diye CSS özelliği kısa süre kapatılır. */
+ var kok=document.documentElement, eski='';
+ try{eski=kok.style.scrollBehavior;kok.style.scrollBehavior='auto';}catch(e){}
+ try{window.scrollTo(0,y);}catch(e){}
+ try{kok.style.scrollBehavior=eski;}catch(e){}
+}
+
+/* ═══════ 1) KALDIĞIM YER ═══════ */
+var KY_SURUM=1, KY_OMUR=30*24*60*60*1000;   /* 30 gün sonra unutulur */
+function kyAnah(){return 'lole.kaldigimYer.v'+KY_SURUM+'.'+kfKullanici();}
+var _kyT=null, _kyHedef=null, _kyKaydirma=0;
+
+function kyYazGecikmeli(){clearTimeout(_kyT);_kyT=setTimeout(kyYaz,500);}
+function kyYaz(){
+ try{
+  if(!CO||!SESSION)return;
+  kfYaz(kyAnah(),{
+   v:KY_SURUM, ts:Date.now(), co:CO, page:PAGE,
+   kaydirma:Math.round(window.scrollY||document.documentElement.scrollTop||0),
+   txFilter:txFilter, repRange:repRange, repMode:repMode, grupRange:grupRange,
+   cariTab:cariTab, cekFiltre:cekFiltre, konFiltre:konFiltre, panelView:panelView,
+   katTab:katTab, gdSekme:gdSekme, gxSekme:gxSekme
+  });
+ }catch(e){}
+}
+function kyOku(){
+ var d=kfOku(kyAnah());
+ if(!d||d.v!==KY_SURUM||!d.co)return null;
+ if(!d.ts||Date.now()-d.ts>KY_OMUR){kfSil(kyAnah());return null;}
+ return d;
+}
+function kaldigimYeriSil(){clearTimeout(_kyT);kfSil(kyAnah());}
+
+/* Süzgeçleri geri yükle — ekran doğru dönemle çizilsin diye enterCo'dan ÖNCE. */
+function kySuzgecleriYukle(d){
+ var ay=function(v){return typeof v==='string'&&GUN_BICIM.test(v);};
+ try{
+  if(d.txFilter&&typeof d.txFilter==='object'){
+   ['type','cat','kz','q'].forEach(function(k){if(typeof d.txFilter[k]==='string')txFilter[k]=d.txFilter[k];});
+   if(ay(d.txFilter.from))txFilter.from=d.txFilter.from;
+   if(ay(d.txFilter.to))txFilter.to=d.txFilter.to;
+  }
+  if(d.repRange&&ay(d.repRange.from)&&ay(d.repRange.to))repRange={from:d.repRange.from,to:d.repRange.to};
+  if(d.repMode==='nakit'||d.repMode==='tahakkuk')repMode=d.repMode;
+  if(d.grupRange&&ay(d.grupRange.from)&&ay(d.grupRange.to))grupRange={from:d.grupRange.from,to:d.grupRange.to};
+  /* v54b: doğrulanmamış değerler ekranı sessizce BOŞ gösteriyordu (ör. silinmiş bir
+     şirket kimliği konFiltre.co'ya geri yüklenince Kontrol Merkezi hiç kayıt
+     getirmiyor, kullanıcı nedenini bilmiyor). Artık yalnızca bilinen değerler. */
+  if(['all','musteri','tedarikci','diger'].indexOf(d.cariTab)!==-1)cariTab=d.cariTab;
+  if(['','alinan','verilen','hafta'].indexOf(d.cekFiltre)!==-1)cekFiltre=d.cekFiltre;
+  if(d.konFiltre&&typeof d.konFiltre==='object'){
+   Object.keys(konFiltre).forEach(function(k){
+    if(typeof d.konFiltre[k]===typeof konFiltre[k])konFiltre[k]=d.konFiltre[k];
+   });
+   if(konFiltre.co&&konFiltre.co!=='*'&&!kfCoTanimli(konFiltre.co))konFiltre.co='';
+  }
+  if(d.panelView&&typeof d.panelView==='object')Object.keys(panelView).forEach(function(k){
+   if(d.panelView[k]==='kart'||d.panelView[k]==='tablo')panelView[k]=d.panelView[k];});
+  if(d.katTab==='genel'||d.katTab==='eksik')katTab=d.katTab;
+  ['hepsi','kesin','supheli','veri'].forEach(function(s){
+   if(d.gdSekme===s)gdSekme=s; if(d.gxSekme===s)gxSekme=s;});
+ }catch(e){}
+}
+/* enterCo sonunda hangi sayfaya gidileceğini belirler (kyUygula bunu kullanır). */
+function kyHedefSayfa(id){
+ var p=(id==='grup')?'grup':(id==='merkez')?'merkez':'dash';
+ if(kfSayfaGecerli(_kyHedef))p=_kyHedef;
+ _kyHedef=null;
+ return p;
+}
+function kyKaydirmayiGeriYukle(){
+ if(!(_kyKaydirma>40))
+  {_kyKaydirma=0;return;}
+ var y=_kyKaydirma; _kyKaydirma=0;
+ /* içerik (grafikler, tablolar) yüklendikçe sayfa uzuyor — birkaç kez denenir.
+    v54b: kullanıcı bu arada kendi kaydırmasını yaptıysa onu ZORLA geri çekmeyiz. */
+ var zm=[90,320,700].map(function(ms){return setTimeout(function(){kfKaydir(y);},ms);});
+ var iptal=function(){zm.forEach(function(t){clearTimeout(t);});};
+ ['wheel','touchstart','keydown','pointerdown'].forEach(function(ev){
+  try{window.addEventListener(ev,iptal,{passive:true,once:true});}catch(e){}
+ });
+}
+function kaldigimYeriUygula(){
+ var d=kyOku();
+ if(!d)return false;
+ /* `canAccessCo` süper yönetici için DAİMA true döner — silinmiş ya da tanımsız bir
+    şirket kimliği bu yüzden geçiyordu. Kimliğin gerçekten var olduğu da doğrulanır. */
+ /* `canAccessCo` süper yönetici için DAİMA true döner — silinmiş ya da tanımsız bir
+    şirket kimliği bu yüzden geçiyordu. Kimliğin gerçekten var olduğu da doğrulanır. */
+ try{
+  if(!kfCoTanimli(d.co)||!canAccessCo(d.co)){kaldigimYeriSil();return false;}
+ }catch(e){return false;}
+ /* v54b: süzgeçler ve hedef bayrağı `enterCo` BAŞARISIZ olursa sızıyordu — kullanıcı
+    sonradan elle başka bir şirket seçtiğinde o şirket yanlış ekranda ve yabancı bir
+    dönem süzgeciyle açılıyordu. Başarısızlıkta hepsi geri alınır. */
+ var _yedek={txFilter:JSON.parse(JSON.stringify(txFilter)),repRange:{from:repRange.from,to:repRange.to},
+  repMode:repMode,grupRange:{from:grupRange.from,to:grupRange.to},cariTab:cariTab,cekFiltre:cekFiltre,
+  konFiltre:JSON.parse(JSON.stringify(konFiltre)),panelView:JSON.parse(JSON.stringify(panelView)),
+  katTab:katTab,gdSekme:gdSekme,gxSekme:gxSekme};
+ var _geriAl=function(){
+  try{
+   txFilter=_yedek.txFilter;repRange=_yedek.repRange;repMode=_yedek.repMode;grupRange=_yedek.grupRange;
+   cariTab=_yedek.cariTab;cekFiltre=_yedek.cekFiltre;konFiltre=_yedek.konFiltre;
+   panelView=_yedek.panelView;katTab=_yedek.katTab;gdSekme=_yedek.gdSekme;gxSekme=_yedek.gxSekme;
+  }catch(e){}
+  _kyHedef=null;_kyKaydirma=0;
+ };
+ kySuzgecleriYukle(d);
+ _kyHedef=kfSayfaGecerli(d.page)?d.page:null;
+ _kyKaydirma=+d.kaydirma||0;
+ try{ enterCo(d.co); }catch(e){ _geriAl(); return false; }
+ if(CO!==d.co){ _geriAl(); return false; }
+ kyKaydirmayiGeriYukle();
+ try{toast('↩ Kaldığınız yerden devam — '+coName(CO)+(kfSayfaGecerli(d.page)?' · '+kfSayfaAdi(d.page):''));}catch(e){}
+ return true;
+}
+function kfSayfaAdi(p){
+ var A={dash:'Ana Sayfa',ai:'AI Asistan',acc:'Hesaplar',tx:'Gelir-Gider',pos:'POS',card:'Kredi Kartları',
+  cari:'Cariler',staff:'Personel',fixed:'Sabit Ödemeler',cek:'Çek & Senet',stok:'Stok',asset:'Demirbaş',
+  budget:'Bütçe',rep:'Raporlar',gecmis:'İşlem Geçmişi',kontrol:'İşlem Kontrol Merkezi',task:'Görevler',
+  set:'Ayarlar',grup:'Grup',merkez:'Merkez Kasa',ortak:'Ortaklar',katduzelt:'Kategori Düzeltme',
+  gelirden:'Gelir Denetimi',giderden:'Gider Denetimi'};
+ return A[p]||p;
+}
+
+/* ═══════ 2) SESSİZ (YUMUŞAK) EŞİTLEME ═══════ */
+var _kfYumusak=false;        /* go() içinde kaydırmayı başa atmayı engeller */
+var _kfBekleyen=false;       /* meşgulken bekletilen yenileme */
+
+/* "Meşgul" = ekranı baştan çizmek kullanıcının yarım işini bozar. */
+function kfMesgulMu(){
+ try{
+  var mw=document.getElementById('modalWrap');
+  if(mw&&mw.classList.contains('on'))return true;          /* form / pencere açık */
+  var ms=document.getElementById('moreSheet');
+  if(ms&&ms.classList.contains('on'))return true;
+  var a=document.activeElement;
+  /* v54b: boş bir süzgeç kutusunda duran odak eşitlemeyi SONSUZA KADAR erteliyordu
+     (mobilde çok yaygın). Form içindeki alan ya da içinde bir şey yazılmış alan
+     meşgul sayılır; boş bir süzgeç kutusu sayılmaz. */
+  if(a&&a.tagName&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)){
+   try{ if(a.closest('#mForm')||String(a.value||'')!=='')return true; }catch(e){return true;}
+  }
+  /* Kategori Düzeltme Merkezi'nde seçimler DOM'da durur — yenileme onları siler */
+  /* v54b: "bu sayfada select var mı" koşulu KALICI kilit üretiyordu — düzeltilecek
+     kayıt oldukça select hep basılıyor. Yalnızca GERÇEKTEN seçim yapılmışsa meşgul. */
+  if(PAGE==='katduzelt'&&[].some.call(document.querySelectorAll('#main select'),
+     function(sl){return !!sl.value;}))return true;
+  return false;
+ }catch(e){return false;}
+}
+var _kfBekTs=0, KF_BEK_SINIR=90000;   /* v54b: en çok 90 sn bekletilir */
+function kfYumusakYenile(){
+ if(!CO||!PAGE)return;
+ if(kfMesgulMu()&&!(_kfBekTs&&Date.now()-_kfBekTs>KF_BEK_SINIR)){
+  if(!_kfBekleyen)_kfBekTs=Date.now();
+  _kfBekleyen=true;kfBekleyenRozet(true);return;
+ }
+ _kfBekTs=0;
+ _kfBekleyen=false;kfBekleyenRozet(false);
+ var y=window.scrollY||document.documentElement.scrollTop||0;
+ var m=document.getElementById('main');
+ if(m)m.classList.add('noAnim');          /* giriş animasyonları tekrar oynamasın */
+ _kfYumusak=true;
+ try{go(PAGE);}catch(e){}
+ _kfYumusak=false;
+ var ger=function(){kfKaydir(y);};
+ ger();
+ var z1=setTimeout(ger,60);
+ var z2=setTimeout(function(){ger();if(m)m.classList.remove('noAnim');},280);
+ /* v54b: kullanıcı yenileme sırasında kaydırdıysa ona karışmayız */
+ var iptal=function(){clearTimeout(z1);clearTimeout(z2);if(m)m.classList.remove('noAnim');};
+ ['wheel','touchstart','keydown','pointerdown'].forEach(function(ev){
+  try{window.addEventListener(ev,iptal,{passive:true,once:true});}catch(e){}
+ });
+}
+function kfBekleyenUygula(){ _kfBekleyen=false; kfBekleyenRozet(false); kfYumusakYenile(); }
+function kfBekleyenRozet(goster){
+ try{
+  var id='kfSyncRozet', el=document.getElementById(id);
+  if(!goster){if(el)el.remove();return;}
+  if(el)return;
+  el=document.createElement('div');
+  el.id=id;
+  /* alt gezinme çubuğu (.bnav bottom:12px, ~62px yüksek) ve ortadaki + düğmesinin
+     üstünde kalır; sol kenara yakın olduğu için düğmelerle çakışmaz */
+  el.style.cssText='position:fixed;left:14px;bottom:calc(92px + env(safe-area-inset-bottom));z-index:45;background:#1d2c4d;color:#fff;'+
+   'padding:9px 13px;border-radius:12px;font:600 12.5px system-ui;box-shadow:0 8px 24px rgba(0,0,0,.28);'+
+   'display:flex;gap:9px;align-items:center;max-width:min(420px,92vw)';
+  el.innerHTML='☁ <span style="font-weight:400">Yeni veri geldi — işiniz bitince ekran güncellenecek.</span>'+
+   '<button data-act="kfBekleyenUygula" style="background:#fff;color:#1d2c4d;border:0;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer;white-space:nowrap">Şimdi</button>';
+  document.body.appendChild(el);
+ }catch(e){}
+}
+
+/* ═══════ 3) YARIM KALAN FORM TASLAĞI ═══════ */
+var TASLAK_OMUR=24*60*60*1000;
+function taslakAnah(){return 'lole.formTaslak.v1.'+kfKullanici();}
+var _taslakBaslik='', _taslakKaynak=null, _taslakT=null;
+
+function formTaslakYazGecikmeli(){clearTimeout(_taslakT);_taslakT=setTimeout(formTaslakYaz,600);}
+function formTaslakYaz(){
+ try{
+  var mw=document.getElementById('modalWrap');
+  if(!mw||!mw.classList.contains('on'))return;
+  var box=document.getElementById('mForm');
+  if(!box)return;
+  var alanlar={}, dolu=false;
+  [].forEach.call(box.querySelectorAll('[name]'),function(el){
+   if(el.type==='checkbox'){
+    if(el.checked){(alanlar[el.name]=alanlar[el.name]||[]).push(el.value);dolu=true;}
+    return;
+   }
+   var v=el.value;
+   if(v===''||v==null)return;
+   alanlar[el.name]=v;
+   /* sadece seçili gelen tarih/tür gibi varsayılanlar "dolu" saymaz */
+   if(el.tagName!=='SELECT'&&el.type!=='date'&&String(v).trim()!=='')dolu=true;
+  });
+  if(!dolu){kfSil(taslakAnah());return;}
+  kfYaz(taslakAnah(),{ts:Date.now(),co:CO,page:PAGE,baslik:_taslakBaslik||'Kayıt',
+   kaynak:_taslakKaynak||null,alanlar:alanlar});
+ }catch(e){}
+}
+function formTaslakSil(){clearTimeout(_taslakT);kfSil(taslakAnah());kfTaslakRozet(false);}
+function formTaslakOku(){
+ var d=kfOku(taslakAnah());
+ if(!d||!d.alanlar)return null;
+ if(!d.ts||Date.now()-d.ts>TASLAK_OMUR){kfSil(taslakAnah());return null;}
+ return d;
+}
+function kfTaslakRozet(gosterVeri){
+ try{
+  var id='kfTaslakRozet', el=document.getElementById(id);
+  if(!gosterVeri){if(el)el.remove();return;}
+  if(el)el.remove();
+  var d=gosterVeri;
+  el=document.createElement('div');
+  el.id=id;
+  el.style.cssText='position:fixed;left:14px;bottom:calc(152px + env(safe-area-inset-bottom));z-index:45;background:#8a5a00;color:#fff;'+
+   'padding:10px 13px;border-radius:12px;font:600 12.5px system-ui;box-shadow:0 8px 24px rgba(0,0,0,.28);'+
+   'display:flex;gap:9px;align-items:center;flex-wrap:wrap;max-width:min(440px,92vw)';
+  el.innerHTML='📝 <span style="font-weight:400">Yarım kalmış bir kayıt var:</span> <b>'+esc(String(d.baslik||'Kayıt').slice(0,60))+'</b>'+
+   '<button data-act="formTaslakDevam" style="background:#fff;color:#8a5a00;border:0;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer">Devam et</button>'+
+   '<button data-act="formTaslakSil" style="background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:8px;padding:5px 10px;font-weight:700;cursor:pointer">Sil</button>';
+  document.body.appendChild(el);
+ }catch(e){}
+}
+function formTaslakRozetiGoster(){
+ var d=formTaslakOku();
+ if(!d)return;
+ if(d.co&&CO&&d.co!==CO)return;       /* başka şirkette girilmiş taslağı burada göstermeyiz */
+ kfTaslakRozet(d);
+}
+function _taslakDoldur(alanlar){
+ var box=document.getElementById('mForm');
+ if(!box)return false;
+ var n=0;
+ Object.keys(alanlar||{}).forEach(function(ad){
+  var v=alanlar[ad];
+  if(Array.isArray(v)){
+   [].forEach.call(box.querySelectorAll('[name="'+ad+'"]'),function(el){
+    if(el.type==='checkbox'){el.checked=v.indexOf(el.value)!==-1;n++;}});
+   return;
+  }
+  var el=box.querySelector('[name="'+ad+'"]');
+  if(!el)return;
+  if(el.tagName==='SELECT'){
+   /* v54b KRİTİK: eskiden listede olmayan değer `<option>` olarak EKLENİYORDU.
+      Böylece silinmiş bir kategori ya da BAŞKA ŞİRKETİN hesap kimliği kayda geri
+      yazılabiliyordu (ölçüm: pati kaydına rest'in RA1 hesabı yazıldı). Artık
+      eklenmez; kullanıcı uyarılır ve alanı kendisi seçer. */
+   var varMi=[].some.call(el.options,function(o){return String(o.value)===String(v);});
+   if(!varMi){
+    try{toast('⚠ Taslaktaki bir seçim artık listede yok — o alanı elle seçin');}catch(e){}
+    return;
+   }
+  }
+  el.value=v;n++;
+  try{el.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}
+ });
+ return n>0;
+}
+/* v54b: taslağı yalnızca GERÇEKTEN form açan, bilinen eylemler yeniden açabilir.
+   Aksi halde (a) rozetin kendi düğmesi `formTaslakDevam` olarak kaydedildiği için
+   fonksiyon kendini çağırıp özyinelemeye giriyordu (ölçüm: 4.297 derinlik, ekranda
+   hiçbir şey açılmıyor), (b) taslağa elle yazılmış herhangi bir eylem adı
+   çalıştırılabiliyordu. */
+var TASLAK_ACICI={addTxnForm:1,editTxn:1,virmanForm:1,accForm:1,cariForm:1,cardForm:1,
+ cardTxnForm:1,cariTxnForm:1,staffForm:1,staffPayForm:1,cekForm:1,stockForm:1,stockTxnForm:1,
+ assetForm:1,fixedForm:1,posForm:1,posEntryForm:1,taskForm:1,budgetForm:1,userForm:1,
+ noteForm:1,partnerForm:1,catForm:1};
+function formTaslakDevam(){
+ var d=formTaslakOku();
+ if(!d){kfTaslakRozet(false);toast('Taslak bulunamadı');return;}
+ /* v54b KRİTİK: taslak BAŞKA şirkette girilmişse burada açılmamalı — eskiden
+    açılıyordu ve "Kaydet"e basıldığında kayıt YANLIŞ ŞİRKETİN defterine
+    (hatta başka şirketin hesabına) yazılıyordu. */
+ if(d.co&&CO&&d.co!==CO){
+  kfTaslakRozet(false);
+  toast('📝 Bu taslak '+coName(d.co)+' şirketinde girilmişti — o şirkete geçip devam edin');
+  return;
+ }
+ kfTaslakRozet(false);
+ var k=d.kaynak;
+ var fn=(k&&k.act&&TASLAK_ACICI[k.act]&&typeof window[k.act]==='function')?window[k.act]:null;
+ if(fn){
+  try{fn.apply(null,(k.args||[]));}catch(e){toast('Form açılamadı: '+e.message);}
+  setTimeout(function(){
+   if(_taslakDoldur(d.alanlar))toast('📝 Taslak geri yüklendi — kontrol edip Kaydet\'e basın');
+   else kfTaslakGoster(d);
+  },140);
+  return;
+ }
+ kfTaslakGoster(d);
+}
+/* Formu yeniden açamadıysak hiç olmazsa girilen değerleri kaybetmeyelim */
+function kfTaslakGoster(d){
+ var sat=Object.keys(d.alanlar||{}).map(function(k){
+  var v=d.alanlar[k]; if(Array.isArray(v))v=v.join(', ');
+  return '<tr><td class="tiny">'+esc(k)+'</td><td><b>'+esc(String(v))+'</b></td></tr>';
+ }).join('');
+ uiInfo('📝 Yarım kalmış kayıt — '+String(d.baslik||''),
+  '<p class="tiny" style="margin-bottom:8px">Bu kayıt tamamlanmadan sayfa kapanmış. Formu otomatik açamadım, '+
+  'ama girdiğiniz değerler aşağıda — kaydı elle açıp bunları girebilirsiniz.</p>'+
+  '<table><tbody>'+sat+'</tbody></table>'+
+  '<div class="cardBtns" style="margin-top:10px"><button class="btn gh" data-act="formTaslakSil">🗑 Taslağı sil</button></div>');
+}
+
+/* ═══════ KURULUM ═══════ */
+function kfKurulum(){
+ if(window.__kfKuruldu)return;          /* v54b: çıkış/giriş turunda dinleyici ve zamanlayıcı çiftlenmesin */
+ window.__kfKuruldu=true;
+ try{
+  /* giriş animasyonu yumuşak yenilemede oynamasın */
+  if(!document.getElementById('kfStil')){
+   var st=document.createElement('style');
+   st.id='kfStil';
+   st.textContent='.main.noAnim>*{animation:none!important}';
+   document.head.appendChild(st);
+  }
+ }catch(e){}
+ /* kaldığım yeri sürekli güncel tut */
+ try{
+  window.addEventListener('scroll',kyYazGecikmeli,{passive:true});
+  window.addEventListener('pagehide',kyYaz);
+  document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')kyYaz();});
+  setInterval(kyYazGecikmeli,10000);     /* süzgeç değişiklikleri de yakalanır */
+ }catch(e){}
+ /* form taslağı: her tuşta/değişimde sakla */
+ try{
+  document.addEventListener('input',function(e){
+   var t=e.target;
+   if(t&&t.closest&&t.closest('#mForm'))formTaslakYazGecikmeli();
+  },true);
+  document.addEventListener('change',function(e){
+   var t=e.target;
+   if(t&&t.closest&&t.closest('#mForm'))formTaslakYazGecikmeli();
+  },true);
+ }catch(e){}
+ /* meşguliyet bitince bekleyen yenilemeyi uygula */
+ try{setInterval(function(){if(_kfBekleyen&&!kfMesgulMu())kfBekleyenUygula();},4000);}catch(e){}
 }
