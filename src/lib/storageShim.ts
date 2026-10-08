@@ -37,9 +37,31 @@ export interface LoleStorage {
     | { ok: true; updatedAt: string }
     | { ok: false; current: { value: string; updatedAt: string | null } | null }
   >;
+  /**
+   * v56: satırların GERÇEK bayt boyutu. Tahmin değil ölçüm.
+   * `method` hangi yolun kullanıldığını söyler: 'rpc' (veritabanında hesaplandı)
+   * ya da 'indirme' (değerler indirilip ölçüldü). Ayrıntı için uygulamaya bakın.
+   */
+  sizes(
+    prefix?: string,
+    shared?: boolean
+  ): Promise<{
+    items: { key: string; bytes: number }[];
+    total: number;
+    method: 'rpc' | 'indirme';
+    downloadedBytes: number;
+  }>;
 }
 
 const TABLE = 'kv_store';
+
+/**
+ * v56b: `%` ve `_` SQL LIKE joker karakterleridir. Bugün tüm önekler sabit ve
+ * ASCII olduğu için sömürülebilir bir durum yok, ama `_` içeren bir anahtar öneki
+ * sessizce DAHA GENİŞ eşleşir (hata vermez) — bu da yanlış satırları silmeye ya da
+ * saymaya kadar gidebilir. Önek her zaman kaçışlanır.
+ */
+const likeEscape = (v: string) => (v || '').replace(/([%_\\])/g, '\\$1');
 
 export function makeStorage(sb: SupabaseClient, userId: string): LoleStorage {
   const scopeOf = (shared?: boolean) => (shared ? 'shared' : userId);
@@ -138,9 +160,84 @@ export function makeStorage(sb: SupabaseClient, userId: string): LoleStorage {
         .from(TABLE)
         .select('key')
         .eq('scope', scopeOf(shared))
-        .like('key', `${prefix}%`);
+        .like('key', `${likeEscape(prefix)}%`);
       if (error) throw error;
       return { keys: (data || []).map((r: { key: string }) => r.key) };
+    },
+
+    /**
+     * v56: GERÇEK boyut ölçümü.
+     *
+     * Ayarlar ekranındaki "Bulut Depolama Kullanımı" kutusu eskiden canlı verinin
+     * uzunluğunu 14 ile çarpıp TAHMİN üretiyordu; bu tahmin hem yanlış tavana
+     * (20 MB — uygulamanın Claude artifact dönemindeki sınırı) göre ölçüyor hem de
+     * yedeklerin gzip'li olduğunu saymıyordu. Sonuç: %134 gibi asılsız "Kritik"
+     * uyarıları. Burada satırların gerçek bayt boyutunu okuyoruz.
+     *
+     * İki yol var:
+     *  1) `kv_sizes` RPC'si kuruluysa boyutlar veritabanında hesaplanır — ucuz ve
+     *     kesin. Kurulum SQL'i (Supabase > SQL Editor, bir kez çalıştırılır):
+     *
+     *       create or replace function kv_sizes(p_scope text, p_prefix text default '')
+     *       returns table(key text, bytes bigint)
+     *       language sql stable security invoker as $$
+     *         select key, octet_length(value)::bigint
+     *         from kv_store
+     *         where scope = p_scope and key like p_prefix || '%'
+     *       $$;
+     *
+     *  2) RPC yoksa (varsayılan durum) satırların değerleri indirilip ölçülür.
+     *     Kesin sonuç verir ama indirme maliyeti vardır; bu yüzden YALNIZCA
+     *     kullanıcı "🔎 Gerçek boyutu ölç" düğmesine bastığında çağrılır.
+     */
+    async sizes(prefix = '', shared) {
+      const scope = scopeOf(shared);
+
+      // 1) ucuz yol — RPC kuruluysa
+      try {
+        const { data, error } = await sb.rpc('kv_sizes', { p_scope: scope, p_prefix: prefix });
+        if (!error && Array.isArray(data)) {
+          const items = (data as { key: string; bytes: number | string }[]).map((r) => ({
+            key: r.key,
+            bytes: Number(r.bytes) || 0,
+          }));
+          return {
+            items,
+            total: items.reduce((s, i) => s + i.bytes, 0),
+            method: 'rpc' as const,
+            downloadedBytes: 0,
+          };
+        }
+      } catch {
+        /* RPC kurulu değil — indirme yoluna düş */
+      }
+
+      // 2) yedek yol — değerleri indirip ölç
+      // v56b: PostgREST'in varsayılan satır sınırı sonucu SESSİZCE kırpabilir ve
+      // toplam eksik çıkar. Açık bir üst sınır koyup aşıldığında hata veriyoruz —
+      // eksik bir toplamı "gerçek ölçüm" diye göstermektense ölçüm yapmamak yeğdir.
+      const SATIR_SINIRI = 5000;
+      const { data, error } = await sb
+        .from(TABLE)
+        .select('key, value')
+        .eq('scope', scope)
+        .like('key', `${likeEscape(prefix)}%`)
+        .limit(SATIR_SINIRI);
+      if (error) throw error;
+      if ((data || []).length >= SATIR_SINIRI) {
+        throw new Error(
+          `Çok fazla kayıt (${SATIR_SINIRI}+) — ölçüm eksik kalacağı için iptal edildi.`
+        );
+      }
+      const enc = new TextEncoder();
+      const items: { key: string; bytes: number }[] = (data || []).map(
+        (r: { key: string; value: string | null }) => ({
+          key: r.key,
+          bytes: r.value ? enc.encode(r.value).length : 0,
+        })
+      );
+      const total = items.reduce((s: number, i: { bytes: number }) => s + i.bytes, 0);
+      return { items, total, method: 'indirme' as const, downloadedBytes: total };
     },
   };
 }

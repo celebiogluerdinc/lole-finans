@@ -425,21 +425,125 @@ async function loadState(){
 }
 /* ---------- YEDEK GEÇMİŞİ (v9 — TAMAMEN BULUTTA. Cihaza hiçbir şey otomatik yazılmaz.
    Cihaza kayıt YALNIZCA Ayarlar > "Yedek İndir / Panoya Kopyala" düğmelerine bilerek basıldığında olur. ---------- */
-var BACKUP_KEEP_DAYS=14;
+/* v56b: eski BACKUP_KEEP_DAYS=14 kaldırıldı — hiçbir yerde kullanılmıyordu ama
+   "yedekler 14 gün tutulur" izlenimi veriyordu. GERÇEK saklama kuralı
+   pruneOldBackups'ta: son 3 günün tamamı + 4 haftaya kadar pazartesi yedekleri
+   (~7 kopya). Depolama tahmini BACKUP_SNAPSHOT_SAYISI'nı kullanır. */
 var lastBackupInfo=null; // bu oturumda yapılan son otomatik bulut yedeği (yalnızca bellekte tutulur, cihaza yazılmaz)
-var STORAGE_CAP_BYTES=20*1024*1024; // Anthropic'in artifact başına sabit 20 MB sınırı
-var storageWarnShown=false; // bu oturumda eşik uyarısı bir kez gösterildi mi
-function computeStorageEstimate(){ // GERÇEK ölçüm değil — Anthropic kullanım sorgulama imkanı sunmuyor; canlı veri + günlük yedeklerden TAHMİN
- var liveSize=JSON.stringify(S).length;
- var backupsSize=liveSize*BACKUP_KEEP_DAYS; // her gün tam kopya alınıyor
+/* v56 DÜZELTME — "Bulut Depolama Kullanımı" kutusu asılsız "Kritik %134" uyarısı veriyordu.
+   Üç ayrı hata üst üste binmişti:
+     1) TAVAN YANLIŞTI. 20 MB, uygulamanın Claude artifact olarak çalıştığı dönemdeki
+        artifact başına sınırdı. Veriler artık kullanıcının kendi Supabase projesindeki
+        `kv_store` tablosunda; ücretsiz planda veritabanı sınırı 500 MB.
+     2) YEDEK SAYISI YANLIŞTI. Tahmin 14 tam kopya varsayıyordu; pruneOldBackups ise
+        son 3 günün tamamını + 4 haftaya kadar pazartesi yedeklerini tutuyor (~7 kopya).
+     3) SIKIŞTIRMA SAYILMIYORDU. dailyBackup anlık görüntüyü gzip'leyerek yazıyor
+        (GZB64: öneki); JSON'da tipik kazanç 8-10 kat. Tahmin sıkıştırılmamış boyutu
+        14 ile çarpıyordu.
+   Sonuç: gerçekte binde birkaç olan kullanım %134 görünüyor, kullanıcı gereksiz yere
+   yedek saklama süresini kısaltmaya yöneltiliyordu. Artık hem tahmin gerçeğe yakın,
+   hem de "🔎 Gerçek boyutu ölç" ile tahmin yerine ÖLÇÜM konabiliyor. */
+var STORAGE_CAP_BYTES=500*1024*1024; // Supabase ücretsiz plan: proje başına 500 MB veritabanı (Pro planda 8 GB)
+var STORAGE_PLAN_ADI='Supabase ücretsiz plan';
+var BACKUP_SNAPSHOT_SAYISI=7;        // pruneOldBackups'ın gerçekte tuttuğu kopya sayısı: son 3 gün + 4 pazartesi
+var BACKUP_GZIP_ORANI=0.12;          // gzip'li anlık görüntü, sıkıştırılmamış boyutun ~%12'si (ölçümle güncellenebilir)
+var storageWarnShown=false;          // bu oturumda eşik uyarısı bir kez gösterildi mi
+var storageOlcum=null;               // {total,items,method,ts} — kullanıcı ölçüm yaptıysa tahminin yerine geçer
+var storageOlcumCalisiyor=false;
+function computeStorageEstimate(){ // ÖLÇÜM varsa onu, yoksa gerçek yedek politikasına göre TAHMİN döndürür
+ if(storageOlcum&&isFinite(storageOlcum.total)){
+  return {live:storageOlcum.live,backups:storageOlcum.backups,other:storageOlcum.other||0,
+          eskiMod:storageOlcum.eskiMod||0,total:storageOlcum.total,
+          pct:storageOlcum.total/STORAGE_CAP_BYTES*100,olculdu:true,
+          kismi:!!storageOlcum.kismi,indirilen:storageOlcum.indirilen||0,
+          method:storageOlcum.method,ts:storageOlcum.ts,satir:storageOlcum.items||[]};
+ }
+ /* v56b: .length UTF-16 birimi sayar; veritabanında ş/ğ/ı/İ/ö/ü/ç 2 bayttır.
+    Türkçe defterde tahmin kendi ölçümünün %10-15 altında kalıyordu; ölçüme
+    basınca sırf birim farkından kaynaklanan bir "artış" görünüyordu. */
+ var _j=JSON.stringify(S);
+ var liveSize=(typeof TextEncoder!=='undefined')?new TextEncoder().encode(_j).length:_j.length;
+ var backupsSize=Math.round(liveSize*BACKUP_SNAPSHOT_SAYISI*BACKUP_GZIP_ORANI);
  var total=liveSize+backupsSize;
- return {live:liveSize,backups:backupsSize,total:total,pct:total/STORAGE_CAP_BYTES*100};
+ return {live:liveSize,backups:backupsSize,total:total,pct:total/STORAGE_CAP_BYTES*100,olculdu:false};
 }
+/* Gerçek ölçüm — yalnızca kullanıcı düğmeye bastığında çalışır (indirme maliyeti olabilir). */
+async function depolamaOlc(){
+ if(storageOlcumCalisiyor)return;
+ if(!window.storage||!window.storage.sizes){toast('Bu yayında gerçek ölçüm yok — sayfayı yenileyip tekrar deneyin');return;}
+ storageOlcumCalisiyor=true;
+ _ayarlariTazele(); /* v56b: go('set') sayfayı başa sarıyordu — kutu sayfanın altında */
+ try{
+  /* withTimeout HATAYI YUTAR ve null döndürür; ölçümde bu kabul edilemez — başarısız
+     bir ölçüm "0 B ölçüldü" diye kaydedilirse kutu tahminden DAHA YANILTICI olur.
+     Bu yüzden hata ayrıştıran withTimeoutErr ve açık sonuç doğrulaması kullanılıyor. */
+  var r=await withTimeoutErr(window.storage.sizes('',true),30000);
+  if(!r||!Array.isArray(r.items))throw new Error('depolama beklenmeyen yanıt verdi');
+  var r2=null;
+  try{r2=await withTimeoutErr(window.storage.sizes('',false),30000);}catch(e){r2=null;} /* kişisel kapsam okunamazsa ortak kapsamla devam */
+  if(r2&&!Array.isArray(r2.items))r2=null;
+  var items=r.items.slice().concat(r2?r2.items:[]);
+  /* Anahtar sınıflandırması ÖNEK/DESEN ile yapılır; '-yedek-' alt dizgisi aramak
+     yeterince kesin değildi (adında '-yedek-' geçen ama yedek OLMAYAN herhangi bir
+     kayıt yedek toplamını şişirirdi). Tarihli yedek deseni sona sabitlenmiştir. */
+  var TARIHLI_YEDEK=/-yedek-\d{4}-\d{2}-\d{2}$/;
+  var EMNIYET_KOPYA=/-pre-(restore|overwrite)-/;
+  var canli=0,yedek=0,diger=0,eskiMod=0;
+  for(var i=0;i<items.length;i++){
+   var k=String(items[i].key||''),b=+items[i].bytes||0;
+   if(!isFinite(b)||b<0)b=0;
+   if(k===skey())canli+=b;
+   /* Eski tek-kullanıcı modundan kalmış ana kayıt: canlı veri DEĞİL. Eskiden canlı
+      sayılıyordu; bu hem canlı boyutu iki katı gösteriyor hem de kullanıcıya
+      silebileceği ölü bir kaydı gizliyordu. */
+   else if(k===DKEY||k===DKEY+'-ekip')eskiMod+=b;
+   else if(TARIHLI_YEDEK.test(k)||EMNIYET_KOPYA.test(k))yedek+=b;
+   else diger+=b;
+  }
+  /* Toplam KOVALARDAN hesaplanır; sağlayıcının 'total' alanı yalnızca çapraz
+     kontrol için. Böylece ekrandaki satırlar her zaman toplamı verir. */
+  var total=canli+yedek+diger+eskiMod;
+  var saglayiciTotal=(+r.total||0)+(r2&&+r2.total||0);
+  /* BOŞ ya da geçersiz ölçüm asla "gerçek ölçüm" olarak kaydedilmez — "0 B ölçüldü"
+     yazan bir kutu, yerini aldığı tahminden daha yanıltıcıdır. (RLS yüzünden boş
+     dönen bir RPC ya da max-rows=0 ayarı tam olarak bunu üretiyordu.) */
+  if(!items.length||!isFinite(total)||total<=0)throw new Error('ölçüm boş döndü — Supabase erişim kurallarını (RLS) kontrol edin');
+  storageOlcum={total:total,live:canli,backups:yedek,other:diger,eskiMod:eskiMod,
+                items:items,saglayiciTotal:saglayiciTotal,
+                kismi:!r2, /* kişisel kapsam okunamadıysa ölçüm EKSİKTİR, kutuda yazar */
+                indirilen:(+r.downloadedBytes||0)+(r2&&+r2.downloadedBytes||0),
+                method:(r&&r.method)||'?',ts:new Date().toISOString()};
+  storageWarnShown=false; /* ölçüm sonrası eşik yeniden değerlendirilsin */
+  toast('🔎 Ölçüldü: '+fmtBytes(total)+' — tahmin yerine gerçek değer kullanılıyor');
+ }catch(e){
+  toast('Ölçüm yapılamadı: '+((e&&e.message)||'bilinmeyen hata'));
+ }finally{
+  storageOlcumCalisiyor=false;
+  _ayarlariTazele();
+ }
+}
+/* v56b: Ayarlar ekranını KAYDIRMA KONUMUNU BOZMADAN yeniden çizer. v54'te bunun
+   için _kfYumusak bayrağı yapılmıştı; depolama kutusu sayfanın altında olduğu için
+   düz go('set') kullanıcıyı ölçümün sonucunu göremediği yere fırlatıyordu. */
+function _ayarlariTazele(){
+ try{
+  if(PAGE!=='set')return;
+  var y=window.scrollY||0;
+  if(typeof _kfYumusak!=='undefined'){_kfYumusak=true;go('set');_kfYumusak=false;}
+  else go('set');
+  if(typeof kfKaydir==='function')kfKaydir(y); else try{window.scrollTo(0,y);}catch(e){}
+ }catch(e){}
+}
+function depolamaOlcumuSil(){storageOlcum=null;storageWarnShown=false;toast('Ölçüm silindi — yeniden tahmine dönüldü');_ayarlariTazele();}
 function checkStorageWarning(){ // yalnızca gerçek bir kayıt başarılı olduğunda çağrılır (oturumda bir kez uyarır)
  var u=computeStorageEstimate();
- if(u.pct>=85&&!storageWarnShown){
+ /* v56: eşik yalnızca GERÇEKTEN yüksek kullanımda konuşur; eskiden yanlış tavan
+    yüzünden normal bir defterde bile her oturumda uyarı atıyordu. */
+ /* v56b: eşik kartın "Kritik" bandıyla (%90) hizalandı; %85'te uyarı atıp kartta
+    yumuşak "Dikkat" yazması kullanıcıyı çelişkili iki mesajla karşılıyordu. */
+ if(u.pct>=90&&!storageWarnShown){
   storageWarnShown=true;
-  toast('⚠ Bulut depolama tahmini %'+u.pct.toFixed(0)+' dolu — Ayarlar\'dan detaya bakın');
+  toast('⚠ Bulut depolama '+(u.olculdu?'ölçümü':'tahmini')+' %'+u.pct.toFixed(0)+' dolu — Ayarlar\'dan detaya bakın');
  }
  return u;
 }
@@ -476,7 +580,7 @@ async function dailyBackup(){ // günde bir kez, o günkü durumun tarihli bir k
   await pruneOldBackups();
  }catch(e){}
 }
-async function pruneOldBackups(){ // buluttaki son BACKUP_KEEP_DAYS günü aşan yedekleri sil (yalnızca bulut, cihazda zaten hiçbir şey yok)
+async function pruneOldBackups(){ // kademeli saklama: son 3 günün tamamı + 4 haftaya kadar pazartesi yedekleri kalır, gerisi silinir (yalnızca bulut; cihazda zaten hiçbir şey yok)
  try{
   if(!window.storage||!window.storage.list) return;
   const prefix=skey()+'-yedek-';
@@ -519,7 +623,7 @@ async function openBackupList(){
  const rows=list.map(b=>
   '<div class="rem"><span class="dot"></span><span>'+dTR(b.date)+'<br><span class="tiny">🌐 bulut</span></span><button class="btn sm gh" data-act="restoreFromDateAsk" data-arg="'+b.date+'">Geri Yükle</button></div>'
  ).join('');
- body.innerHTML='<div class="mh"><h3>🗄 Yedek Geçmişi <span class="tiny">son '+BACKUP_KEEP_DAYS+' gün · bulutta</span></h3><button data-act="closeModal" style="font-size:20px;color:var(--ink3)">✕</button></div>'+
+ body.innerHTML='<div class="mh"><h3>🗄 Yedek Geçmişi <span class="tiny">son 3 gün + 4 hafta pazartesileri · bulutta</span></h3><button data-act="closeModal" style="font-size:20px;color:var(--ink3)">✕</button></div>'+
   '<div class="mb"><p class="mut" style="margin-bottom:10px">Uygulama her gün ilk açıldığında o günkü durumun bir kopyası otomatik olarak yalnızca buluta alınır — cihazda hiçbir kopya tutulmaz.</p>'+rows+'</div>';
 }
 async function preRestoreSnapshot(){ // B4: S'i degistirmeden ONCE su anki halin emniyet kopyasi buluta alinir
@@ -6980,16 +7084,46 @@ function modeCard(){
 }
 function storageUsageCard(){
  var u=computeStorageEstimate();
+ var pctStr=u.pct<=0?'0':(u.pct<0.1?'<0,1':u.pct.toFixed(u.pct<10?1:0).replace('.',','));
  var lvl = u.pct>=90?'n':(u.pct>=70?'w':'p');
  var lvlTxt = u.pct>=90?'Kritik':(u.pct>=70?'Dikkat':'Normal');
- var warn = u.pct>=70 ? '<p class="tiny" style="margin-top:10px;color:'+(u.pct>=90?'var(--neg)':'var(--warn)')+'">'+(u.pct>=90?'⚠ Depolamanın dolmasına çok az kaldı — yedek saklama süresini kısaltmayı konuşalım.':'Kullanım artıyor, bir süre sonra yedek saklama süresini gözden geçirmek isteyebiliriz.')+'</p>' : '';
- return '<div class="card"><h2>📦 Bulut Depolama Kullanımı <span class="chip '+lvl+'">'+lvlTxt+' — %'+u.pct.toFixed(0)+'</span></h2>'+
-  '<p class="mut" style="margin-bottom:10px">Anthropic gerçek kullanım miktarını sorgulama imkanı sunmuyor — bu, canlı veri + günlük yedeklerin boyutundan yapılan bir <b>tahmindir</b>, kesin ölçüm değildir.</p>'+
+ var warn = u.pct>=70 ? '<p class="tiny" style="margin-top:10px;color:'+(u.pct>=90?'var(--neg)':'var(--warn)')+'">'+(u.pct>=90?'⚠ Depolamanın dolmasına az kaldı — yedek saklama süresini kısaltmayı ya da Supabase planını yükseltmeyi konuşalım.':'Kullanım artıyor, bir süre sonra yedek saklama süresini gözden geçirmek isteyebiliriz.')+'</p>' : '';
+ /* v56: bar — rakamın yanında gözle görülür bir doluluk göstergesi */
+ var barW=Math.max(0.6,Math.min(100,u.pct));
+ var bar='<div style="background:#eceff6;border-radius:99px;height:10px;overflow:hidden;margin:4px 0 12px"><div style="width:'+barW+'%;height:100%;background:'+(u.pct>=90?'var(--neg)':u.pct>=70?'var(--warn)':'var(--pos)')+'"></div></div>';
+ /* v56b: ölçümün NEYİ ölçtüğü açıkça yazılır. Ölçüm, uygulamanın kendi
+    kayıtlarının (kv_store) bayt boyutudur; Supabase projesinin TOPLAM veritabanı
+    kullanımı (diğer tablolar, indeksler, auth şeması, şişme) bundan yüksektir.
+    Eski kutu %134 ile fazla söylüyordu; bunu "gerçek ölçüm" diye eksik söylemek de
+    aynı derecede yanıltıcı olurdu. */
+ var olcZaman=u.olculdu?(dTR(String(u.ts).slice(0,10))+' '+String(u.ts).slice(11,16)):'';
+ var aciklama = u.olculdu
+  ? '<p class="mut" style="margin-bottom:6px">Bu bir <b>gerçek ölçümdür</b> — '+olcZaman+' itibarıyla uygulamanın Supabase\'deki kayıtlarının bayt boyutu okundu'+(u.method==='rpc'?' (veritabanında hesaplandı)':u.method==='indirme'?' (kayıtlar indirilip ölçüldü'+(u.indirilen?', '+fmtBytes(u.indirilen):'')+')':'')+'.'+
+    (u.kismi?' <b style="color:var(--warn)">Ölçüm eksik:</b> kişisel kapsamdaki kayıtlar okunamadı, yalnızca ortak veriler sayıldı.':'')+'</p>'
+  : '<p class="mut" style="margin-bottom:6px">Bu bir <b>tahmindir</b>: canlı verinin boyutu + saklanan '+BACKUP_SNAPSHOT_SAYISI+' sıkıştırılmış yedek kopyası. Kesin değeri görmek için aşağıdaki ölçüm düğmesini kullanın.</p>';
+ var dugmeler = '<div class="cardBtns" style="margin-top:12px">'+
+   '<button class="btn sm'+(storageOlcumCalisiyor?' gh':'')+'" data-act="depolamaOlc"'+(storageOlcumCalisiyor?' disabled':'')+'>'+(storageOlcumCalisiyor?'⏳ Ölçülüyor…':'🔎 Gerçek boyutu ölç')+'</button>'+
+   (u.olculdu?'<button class="btn sm gh" data-act="depolamaOlcumuSil">↺ Tahmine dön</button>':'')+
+  '</div>';
+ var dokum='';
+ if(u.olculdu&&u.satir&&u.satir.length){
+  var sirali=u.satir.slice().sort(function(a,b){return (+b.bytes||0)-(+a.bytes||0);}).slice(0,8);
+  dokum='<details style="margin-top:10px"><summary class="tiny" style="cursor:pointer">En büyük '+sirali.length+' kayıt</summary>'+
+   '<table style="margin-top:6px"><tbody>'+
+   sirali.map(function(r){return '<tr><td class="tiny" style="word-break:break-all">'+esc(r.key)+'</td><td class="num tiny">'+fmtBytes(r.bytes)+'</td></tr>';}).join('')+
+   '</tbody></table></details>';
+ }
+ return '<div class="card"><h2>📦 Bulut Depolama Kullanımı <span class="chip '+lvl+'">'+lvlTxt+' — %'+pctStr+'</span></h2>'+
+  aciklama+bar+
   '<table><tbody>'+
    '<tr><td>Canlı veri</td><td class="num">'+fmtBytes(u.live)+'</td></tr>'+
-   '<tr><td>Günlük yedekler ('+BACKUP_KEEP_DAYS+' gün)</td><td class="num">'+fmtBytes(u.backups)+'</td></tr>'+
-   '<tr><td><b>Toplam (tahmini)</b></td><td class="num"><b>'+fmtBytes(u.total)+'</b> / 20 MB</td></tr>'+
-  '</tbody></table>'+warn+'</div>';
+   '<tr><td>Yedekler <span class="tiny">('+(u.olculdu?'ölçülen':BACKUP_SNAPSHOT_SAYISI+' kopya, gzip\'li')+')</span></td><td class="num">'+fmtBytes(u.backups)+'</td></tr>'+
+   (u.olculdu&&u.other?'<tr><td>Diğer kayıtlar <span class="tiny">(ayar, durum kayıtları)</span></td><td class="num">'+fmtBytes(u.other)+'</td></tr>':'')+
+   (u.olculdu&&u.eskiMod?'<tr><td style="color:var(--warn)">Eski moddan kalan kayıt <span class="tiny">artık kullanılmıyor, silinebilir</span></td><td class="num">'+fmtBytes(u.eskiMod)+'</td></tr>':'')+
+   '<tr><td><b>Toplam'+(u.olculdu?'':' (tahmini)')+'</b></td><td class="num"><b>'+fmtBytes(u.total)+'</b> / '+fmtBytes(STORAGE_CAP_BYTES)+'</td></tr>'+
+  '</tbody></table>'+
+  '<p class="tiny" style="margin-top:8px;color:var(--ink3)">Sınır: '+STORAGE_PLAN_ADI+' — proje başına 500 MB veritabanı (Pro planda 8 GB). Buradaki rakam <b>yalnızca bu uygulamanın kayıtlarını</b> sayar; projenizin gerçek toplam kullanımı (diğer tablolar, indeksler) daha yüksektir — kesin değeri Supabase panelinden görebilirsiniz.</p>'+
+  warn+dokum+dugmeler+'</div>';
 }
 async function syncTeam(){
  if(!isTeam()||!window.storage)return;
