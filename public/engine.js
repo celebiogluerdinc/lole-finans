@@ -2142,7 +2142,9 @@ function rAcc(){
    ${chartDonut(rows.map(r=>({label:r.a.name,value:Math.max(0,r.b),color:hashColor(r.a.bankName||r.a.name),act:'accDetail',arg:r.a.id})),'POZİTİF BAKİYE ₺')}
    ${rows.some(r=>r.b<0)?`<div class="tiny" style="margin-top:8px">⚠ Eksi bakiyeli hesaplar halkada gösterilemez: ${rows.filter(r=>r.b<0).map(r=>esc(r.a.name)+' ('+fmt0(r.b)+')').join(' · ')}</div>`:''}
   </div>`:''}
-  ${panelView.acc==='liste'?`<div class="card"><h2>Hesap Listesi <span class="tiny">${rows.length} hesap</span></h2>${accListeTablo(rows)}</div>`
+  ${(!all.length&&inactiveAccs.length)
+   ?`<div class="card"><div class="empty"><b>Aktif hesap yok</b>${inactiveAccs.length} hesap pasife alınmış — aşağıdaki listeden "↩ Aktif Et" ile geri alabilirsiniz. Bakiyeleri ve geçmişleri silinmedi.<br><button class="btn sm" data-act="accForm">＋ Hesap Ekle</button></div></div>`
+   :panelView.acc==='liste'?`<div class="card"><h2>Hesap Listesi <span class="tiny">${rows.length} hesap</span></h2>${accListeTablo(rows)}</div>`
    :(rows.length? `<div class="grid g2">`+rows.map(({a,b})=>{
    const col=hashColor(a.bankName||a.name);
    const sp=accSeries(a,30);
@@ -2169,7 +2171,7 @@ function rAcc(){
    <table><thead><tr><th>Hesap</th><th class="num">Bakiye</th><th class="rowact"></th></tr></thead><tbody>
    ${inactiveAccs.map(a=>`<tr><td><span class="avat sm" style="background:${hashColor(a.bankName||a.name)}">${esc((a.bankName||a.name).charAt(0))}</span> ${esc(a.name)} <span class="tiny">${a.type==='kasa'?'Kasa':esc(a.bankName||'Banka')}</span></td>
    <td class="num">${fmt(accBalance(a))}</td>
-   <td class="rowact"><button class="btn sm gh" data-act="accReactivate" data-arg="${a.id}">↩ Aktif Et</button><button class="btn sm dng" data-act="del" data-arg="acc~${a.id}">🗑 Sil</button></td></tr>`).join('')}
+   <td class="rowact"><button class="btn sm gh" data-act="accDetail" data-arg="${a.id}">📄 Ekstre</button><button class="btn sm gh" data-act="accReactivate" data-arg="${a.id}">↩ Aktif Et</button><button class="btn sm dng" data-act="del" data-arg="acc~${a.id}">🗑 Sil</button></td></tr>`).join('')}
    </tbody></table></div>`:''}
   `; /* v14-D3: hiç doldurulmayan ekstreBox kaldırıldı — ekstre accDetail içinde basılıyor */
  document.getElementById('main').insertAdjacentHTML('beforeend',modSum('acc'));
@@ -2186,8 +2188,9 @@ function cardDeactivate(id){
  if(yetkiYok('tanim.pasif','Pasife almak / yeniden aktif etmek'))return; /* v46 denetim */ /* v14-D2: payMethodOpts zaten c.active!=='0' filtreliyordu ama kartı pasife alacak yol yoktu */
  const c=S.cards.find(x=>x.id===id);if(!c)return;
  c.active='0';try{logAudit('Kart pasife alındı',c.name);}catch(e){}
- save();toast(c.name+' pasife alındı — borcu toplamlarda görünmeye devam eder, yeni harcama listelerinden gizlenir');go('card');
+ save();toast(c.name+' pasife alındı — Kredi Kartları ekranının altındaki "⏸ Pasif Kartlar" listesinde durur, "↩ Aktif Et" ile geri alabilirsiniz');go('card');
 }
+/* v55: pasife alma mesajı artık kartın NEREDE bulunacağını söylüyor */
 function cardReactivate(id){
  if(yetkiYok('tanim.pasif','Pasife almak / yeniden aktif etmek'))return; /* v46 denetim */
  const c=S.cards.find(x=>x.id===id);if(!c)return;
@@ -2431,6 +2434,14 @@ function rPos(){
    <div class="kpi" data-act="setPosTab" data-arg="giris" style="cursor:pointer" title="Bekleyen girişleri göster"><div class="l">Blokajda Bekleyen ↗</div><div class="v">${fmt0(bek.reduce((s,e)=>s+ +e.net,0))}</div><div class="s">${bek.length} işlem</div></div>
   </div>
   ${seg([['giris','Günlük Girişler',ent.length],['cihaz','Cihazlar & Komisyonlar',list.length]],posTab,'setPosTab')}${posTab==='cihaz'?viewSeg('pos'):''}`+
+ /* v55: "⏸ Pasif POS Cihazları" bölümü yalnız "Cihazlar" sekmesinde çiziliyordu;
+    tek POS'u pasife alan kullanıcı "Günlük Girişler" sekmesinde cihazı hiç
+    göremiyordu (kartlardaki aynı hata sınıfı). Artık her sekmede görünür. */
+ (posTab!=='cihaz'&&inactivePos.length?`<div class="card"><h2>⏸ Pasif POS Cihazları <span class="tiny">(${inactivePos.length}) — geçmiş verileri raporlarda korunur</span></h2>
+  <table><thead><tr><th>POS</th><th class="rowact"></th></tr></thead><tbody>
+  ${inactivePos.map(x=>`<tr><td><span class="avat sm" style="background:${hashColor(x.name)}">${esc(x.name.charAt(0))}</span> ${esc(x.name)}</td>
+  <td class="rowact"><button class="btn sm gh" data-act="posDetail" data-arg="${x.id}">📄 Detay</button><button class="btn sm gh" data-act="posReactivate" data-arg="${x.id}">↩ Aktif Et</button></td></tr>`).join('')}
+  </tbody></table></div>`:'')+
  (posTab==='cihaz'
  ? `<div class="card"><h2>Tanımlı POS Cihazları</h2>
   ${panelView.pos==='kart'? posKartlar(list) :
@@ -2587,19 +2598,41 @@ function rCard(){
    'Toplam Kart Borcu' kutusuna tıklayınca yalnızca borcu olanlar listelenir. */
  const list=allCards.filter(c=>c.active!=='0').slice().sort((a,b)=>Math.max(0,cardDebt(b))-Math.max(0,cardDebt(a)));
  const inactiveCards=allCards.filter(c=>c.active==='0');
- const totalDebt=list.reduce((s,c)=>s+Math.max(0,cardDebt(c)),0);
+ /* v55 KRİTİK DÜZELTME — "kartı pasife aldım, kart kayboldu".
+    "⏸ Pasif Kartlar" bölümü, EKRANDA GÖSTERİLEN AKTİF KART VARSA çiziliyordu.
+    Dolayısıyla üç durumda kart tamamen erişilemez hale geliyordu:
+      · tek kartı (ya da hepsini) pasife alınca → "Kayıtlı kart yok" boş ekranı
+      · kart görünümü "liste" seçiliyken → pasif bölüm hiç basılmıyordu
+      · "Toplam Kart Borcu" süzgeci açıkken borcu olmayan tek aktif kart varsa
+    Kart detay sayfasında da "Aktif Et" düğmesi yoktu; yani pasife alınan karta
+    geri dönmenin HİÇBİR yolu kalmıyordu (veri duruyordu, yalnız görünmüyordu).
+    Bölüm artık her koşulda, aktif kart listesinden BAĞIMSIZ olarak çizilir. */
+ const pasifKartBlok = inactiveCards.length?`<div class="card"><h2>⏸ Pasif Kartlar <span class="tiny">(${inactiveCards.length}) — borçları toplamlarda görünmeye devam eder, sadece ödeme/harcama seçim listelerinden gizlenir</span></h2>
+   <table><thead><tr><th>Kart</th><th class="num">Borç</th><th class="rowact"></th></tr></thead><tbody>
+   ${inactiveCards.map(c=>`<tr><td><span class="avat sm" style="background:${hashColor(c.bank||c.name)}">${esc((c.bank||c.name).charAt(0))}</span> ${esc(c.name)} <span class="tiny">${esc(c.bank||'')}</span></td><td class="num">${fmt(cardDebt(c))}</td>
+   <td class="rowact"><button class="btn sm gh" data-act="cardDetail" data-arg="${c.id}">📄 Ekstre</button><button class="btn sm gh" data-act="cardReactivate" data-arg="${c.id}">↩ Aktif Et</button><button class="btn sm dng" data-act="del" data-arg="card~${c.id}">🗑 Sil</button></td></tr>`).join('')}
+   </tbody></table></div>`:'';
+ /* v55b DUZELTME — "Toplam Kart Borcu" yalnizca aktif kartlari sayiyordu, ANA SAYFA ise
+    tum kartlari sayiyor; pasif bir kartin borcu oldugunda iki ekran farkli tutar gosteriyordu
+    ve hemen altindaki "borclari toplamlarda gorunmeye devam eder" notu yanlis cikiyordu.
+    Borc artik pasif kartlari da icerir. LIMIT ve KULLANILABILIR yalniz aktif kartlardan
+    hesaplanir - kapatilmis bir kartin limiti kullanilabilir limit degildir. */
+ const aktifBorc=list.reduce((s,c)=>s+Math.max(0,cardDebt(c)),0);
+ const pasifBorc=inactiveCards.reduce((s,c)=>s+Math.max(0,cardDebt(c)),0);
+ const totalDebt=aktifBorc+pasifBorc;
+ const borcluSayi=allCards.filter(c=>cardDebt(c)>0.005).length;
  const _kartGoster=cardBorcFiltre?list.filter(c=>cardDebt(c)>0.005):list;
  const totalLimit=list.reduce((s,c)=>s+ +(c.limit||0),0);
  document.getElementById('main').innerHTML= topbar('Kredi Kartları',
   `<button class="btn gh" data-act="ekstreYukle" data-arg="kart" title="Kredi kartı ekstresini fotoğraf, PDF ya da Excel olarak yükleyin — harcamalar otomatik okunsun">📷 Ekstre Yükle</button><button class="btn" data-act="cardForm">＋ Kart Ekle</button>`)+
  kartNegatifUyariToplu(byCo(S.cards,CO))+   /* v51: pasif kartlar da uyarıya girer */
- (list.length?`<div class="grid g3" style="margin-bottom:16px">
-   <div class="kpi n" data-act="cardBorcTgl" style="cursor:pointer${cardBorcFiltre?';outline:2px solid var(--acc)':''}" title="Yalnızca borcu olan kartları göster"><div class="l">Toplam Kart Borcu ↗${cardBorcFiltre?' ✓':''}</div><div class="v">${fmt0(totalDebt)}</div><div class="s">${list.filter(c=>cardDebt(c)>0.005).length} kartta borç · tıklayın</div></div>
-   <div class="kpi"><div class="l">Toplam Limit</div><div class="v">${fmt0(totalLimit)}</div><div class="s">${list.length} aktif kart</div></div>
-   <div class="kpi a" data-act="goTxCat" data-arg="gider~Banka & Komisyon~~" style="cursor:pointer" title="Kart ödemelerini işlem listesinde aç"><div class="l">Kullanılabilir ↗</div><div class="v">${fmt0(totalLimit-totalDebt)}</div><div class="s">Doluluk: %${totalLimit?(totalDebt/totalLimit*100).toFixed(1):0}</div></div>
+ (allCards.length?`<div class="grid g3" style="margin-bottom:16px">
+   <div class="kpi n" data-act="cardBorcTgl" style="cursor:pointer${cardBorcFiltre?';outline:2px solid var(--acc)':''}" title="Yalnızca borcu olan kartları göster"><div class="l">Toplam Kart Borcu ↗${cardBorcFiltre?' ✓':''}</div><div class="v">${fmt0(totalDebt)}</div><div class="s">${borcluSayi} kartta borç${pasifBorc>0.005?` · ${fmt0(pasifBorc)} pasif kartta`:''} · tıklayın</div></div>
+   <div class="kpi"><div class="l">Toplam Limit</div><div class="v">${fmt0(totalLimit)}</div><div class="s">${list.length} aktif kart${inactiveCards.length?` · ${inactiveCards.length} pasif (limit sayılmaz)`:''}</div></div>
+   <div class="kpi a" data-act="goTxCat" data-arg="gider~Banka & Komisyon~~" style="cursor:pointer" title="Kart ödemelerini işlem listesinde aç"><div class="l">Kullanılabilir ↗</div><div class="v">${fmt0(totalLimit-aktifBorc)}</div><div class="s">Doluluk: %${totalLimit?(aktifBorc/totalLimit*100).toFixed(1):0}</div></div>
   </div>
-  ${viewSeg('card')}
-  ${totalDebt>0?`<div class="card"><h2>Borç Dağılımı (kart bazında)</h2>${chartDonut(list.map(c=>({label:c.name,value:Math.max(0,cardDebt(c)),color:hashColor(c.bank||c.name),act:'cardDetail',arg:c.id})),'BORÇ ₺')}</div>`:''}${cardInstCard(list)}`:'')+
+  ${list.length?viewSeg('card'):''}
+  ${totalDebt>0.005?`<div class="card"><h2>Borç Dağılımı (kart bazında)</h2>${chartDonut(allCards.filter(c=>cardDebt(c)>0.005).map(c=>({label:c.name+(c.active==='0'?' ⏸':''),value:Math.max(0,cardDebt(c)),color:hashColor(c.bank||c.name),act:'cardDetail',arg:c.id})),'BORÇ ₺')}</div>`:''}${cardInstCard(allCards)}`:'')+
  (panelView.card==='liste'?`<div class="card"><h2>Kart Listesi <span class="tiny">${_kartGoster.length} kart${cardBorcFiltre?' (yalnız borçlular)':''}</span></h2>${cardListeTablo(_kartGoster)}</div>`
   :_kartGoster.length? `<div class="grid g2">`+_kartGoster.map(c=>{
    const debt=cardDebt(c);const _lim=+c.limit||0;
@@ -2626,12 +2659,17 @@ function rCard(){
      <button class="btn sm gh" data-act="cardForm" data-arg="${c.id}">✎</button>
      <button class="btn sm gh" data-act="cardDeactivate" data-arg="${c.id}">⏸ Pasife Al</button>
      <button class="btn sm dng" data-act="del" data-arg="card~${c.id}">Sil</button>
-    </div></div>`;}).join('')+`</div>`+ekstreSonYuklemeler()+(inactiveCards.length?`<div class="card"><h2>⏸ Pasif Kartlar <span class="tiny">(${inactiveCards.length}) — borçları toplamlarda görünmeye devam eder, sadece ödeme/harcama seçim listelerinden gizlenir</span></h2>
-   <table><thead><tr><th>Kart</th><th class="num">Borç</th><th class="rowact"></th></tr></thead><tbody>
-   ${inactiveCards.map(c=>`<tr><td><span class="avat sm" style="background:${hashColor(c.bank||c.name)}">${esc((c.bank||c.name).charAt(0))}</span> ${esc(c.name)} <span class="tiny">${esc(c.bank||'')}</span></td><td class="num">${fmt(cardDebt(c))}</td>
-   <td class="rowact"><button class="btn sm gh" data-act="cardReactivate" data-arg="${c.id}">↩ Aktif Et</button><button class="btn sm dng" data-act="del" data-arg="card~${c.id}">🗑 Sil</button></td></tr>`).join('')}
-   </tbody></table></div>`:'')+`${upcomingInstCard(CO)}<div id="cardEkstreBox"></div>`
-  :`<div class="card"><div class="empty"><b>Kayıtlı kart yok</b>Limit, hesap kesim ve son ödeme günleriyle kartlarınızı ekleyin; son ödeme hatırlatmaları ana sayfada görünür.</div></div>`);
+    </div></div>`;}).join('')+`</div>`
+  : (cardBorcFiltre&&list.length)
+   ? `<div class="card"><div class="empty"><b>Borcu olan kart yok</b>“Toplam Kart Borcu” süzgeci açık olduğu için borcu olmayan ${list.length} kart gizlendi. <button class="btn sm" data-act="cardBorcTgl">✕ Süzgeci kaldır</button></div></div>`
+  : inactiveCards.length
+   ? `<div class="card"><div class="empty"><b>Aktif kart yok</b>${inactiveCards.length} kart pasife alınmış — aşağıdaki listeden "↩ Aktif Et" ile geri alabilirsiniz. Verileri ve borçları silinmedi.</div></div>`
+   : `<div class="card"><div class="empty"><b>Kayıtlı kart yok</b>Limit, hesap kesim ve son ödeme günleriyle kartlarınızı ekleyin; son ödeme hatırlatmaları ana sayfada görünür.</div></div>`)
+ /* v55: aşağıdaki üç blok artık AKTİF KART ŞARTINDAN BAĞIMSIZ — pasife alınan kart
+    her görünümde ve kart kalmasa bile listede durur. */
+ + pasifKartBlok
+ + ekstreSonYuklemeler()
+ + `${upcomingInstCard(CO)}<div id="cardEkstreBox"></div>`;
  document.getElementById('main').insertAdjacentHTML('beforeend',modSum('card'));
 }
 function cardForm(id){
@@ -3304,6 +3342,17 @@ function rStaff(){
  const TT={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
  const LT={yillik:'Yıllık izin',ucretsiz:'Ücretsiz izin',rapor:'Sağlık raporu',mazeret:'Mazeret'};
  const stName=id=>(S.staff.find(x=>x.id===id)||{}).name||'?';
+ /* v55b KRITIK DUZELTME — kredi kartindaki hatanin AYNISI personelde de vardi:
+    "⏸ Pasif Personel" bolumu KADRO sekmesinin sablonunun icinde basiliyordu.
+    staffTab degiskeni ekranlar arasinda korundugu icin, kullanici "Odemeler" ya da
+    "Izin & Rapor" sekmesindeyken Personel ekranini actiginda isten cikarilmis
+    personelin kaydina ve "↩ Aktif Et" dugmesine ulasmanin yolu kalmiyordu.
+    Bolum artik sekmeden BAGIMSIZ olarak her zaman cizilir. */
+ const pasifPersonelBlok = inactiveList.length?`<div class="card"><h2>⏸ Pasif Personel <span class="tiny">(${inactiveList.length}) — işten ayrılan veya hatalı eklenen kayıtlar; ödeme geçmişleri silinmedi</span></h2>
+  <table><thead><tr><th>Ad</th><th class="hidem">Görev</th><th class="rowact"></th></tr></thead><tbody>
+  ${inactiveList.map(s=>`<tr><td><span class="avat sm" style="background:${hashColor(s.name)}">${esc(s.name.charAt(0))}</span> ${esc(s.name)}</td><td class="hidem">${esc(s.pos||'')}</td>
+  <td class="rowact"><button class="btn sm gh" data-act="staffHist" data-arg="${s.id}">📄 Geçmiş</button><button class="btn sm gh" data-act="staffReactivate" data-arg="${s.id}">↩ Aktif Et</button><button class="btn sm dng" data-act="del" data-arg="staffPerma~${s.id}">🗑 Kalıcı Sil</button></td></tr>`).join('')}
+  </tbody></table></div>`:'';
 
  document.getElementById('main').innerHTML= topbar('Personel & Maaş',
   `<button class="btn gh" data-act="maasDonemi">💰 Maaş Dönemi Çalıştır</button><button class="btn gh" data-act="leaveForm">🏖 İzin Gir</button><button class="btn" data-act="staffForm">＋ Personel Ekle</button>`)+
@@ -3348,8 +3397,11 @@ function rStaff(){
   ${chartVBars(ms.map(m=>({label:m.label,bars:[{value:m.gider,color:'var(--acc)',name:'Personel gideri',
      act:'veriAc',arg:vq({co:CO,defter:'staffT',from:m.p+'-01',to:aySon(m.p),baslik:mTR(m.p)+' — personel ödemeleri'})}]})),180)}
   <p class="tiny" style="margin-top:8px">Bir aya tıklayınca o ayın personel ödemeleri listelenir.</p></div>`:''}
- ${panelView.staff==='liste'?`<div class="card"><h2>Kadro Listesi <span class="tiny">${list.length} kişi · ${mTR(mo)}</span></h2>${staffListeTablo(list,mo)}</div>`
-  :list.length? `<div class="grid g2">`+list.map(st=>{
+ ${!list.length
+  ?(inactiveList.length?`<div class="card"><div class="empty"><b>Aktif personel yok</b>${inactiveList.length} personel kaydı pasife alınmış — aşağıdaki listeden "↩ Aktif Et" ile geri alabilirsiniz. Ödeme ve izin geçmişleri silinmedi.</div></div>`
+   :`<div class="card"><div class="empty"><b>Personel kaydı yok</b>Personellerinizi ekleyip maaş, avans ve izinlerini buradan takip edin.</div></div>`)
+  :panelView.staff==='liste'?`<div class="card"><h2>Kadro Listesi <span class="tiny">${list.length} kişi · ${mTR(mo)}</span></h2>${staffListeTablo(list,mo)}</div>`
+  : `<div class="grid g2">`+list.map(st=>{
    const col=hashColor(st.name);
    const paid=staffPaidIn(st.id,mo); // v14-H13 · v44: dönem bazlı
    const pct=Math.min(100,paid/(+st.salary||1)*100);
@@ -3370,13 +3422,8 @@ function rStaff(){
      <button class="btn sm gh" data-act="staffHist" data-arg="${st.id}">📄 Geçmiş</button>
      <button class="btn sm gh" data-act="staffForm" data-arg="${st.id}">✎</button>
      <button class="btn sm dng" data-act="staffDeactivate" data-arg="${st.id}">⏏ Çıkış</button>
-    </div></div>`;}).join('')+`</div>`
-  :'<div class="card"><div class="empty"><b>Personel kaydı yok</b>Personellerinizi ekleyip maaş, avans ve izinlerini buradan takip edin.</div></div>'}
- ${inactiveList.length?`<div class="card"><h2>⏸ Pasif Personel <span class="tiny">(${inactiveList.length}) — işten ayrılan veya hatalı eklenen kayıtlar</span></h2>
-  <table><thead><tr><th>Ad</th><th class="hidem">Görev</th><th class="rowact"></th></tr></thead><tbody>
-  ${inactiveList.map(s=>`<tr><td><span class="avat sm" style="background:${hashColor(s.name)}">${esc(s.name.charAt(0))}</span> ${esc(s.name)}</td><td class="hidem">${esc(s.pos||'')}</td>
-  <td class="rowact"><button class="btn sm gh" data-act="staffReactivate" data-arg="${s.id}">↩ Aktif Et</button><button class="btn sm dng" data-act="del" data-arg="staffPerma~${s.id}">🗑 Kalıcı Sil</button></td></tr>`).join('')}
-  </tbody></table></div>`:''}`)+
+    </div></div>`;}).join('')+`</div>`}`)+
+ pasifPersonelBlok+
  `<div id="staffHistBox"></div>`;
  document.getElementById('main').insertAdjacentHTML('beforeend',modSum('staff'));
 }
@@ -7736,9 +7783,11 @@ function accDetail(id){
  const a=S.accounts.find(x=>x.id===id&&!x.deletedAt);if(!a){toast('Hesap bulunamadı');return;}
  PAGE='acc';_navHi('acc');
  const b=accBalance(a);
+ const _apasif=(a.active==='0'); /* v55b: pasif hesabin detayinda da geri donus yolu olmali */
  const f=accRangeFlow(a,addDays(todayISO(),-30),todayISO());
- document.getElementById('main').innerHTML= topbar((a.type==='kasa'?'💵 ':'🏦 ')+esc(a.name),
+ document.getElementById('main').innerHTML= topbar((a.type==='kasa'?'💵 ':'🏦 ')+esc(a.name)+(_apasif?' ⏸':''),
   `<button class="btn gh" data-act="go" data-arg="acc">← Banka & Kasa</button>`)+
+ (_apasif?`<div class="card" style="border-left:4px solid var(--warn);padding:10px 14px;margin-bottom:12px"><p class="tiny" style="margin:0">⏸ <b>Bu hesap pasif.</b> Bakiyesi ve geçmişi korunuyor, yalnızca yeni işlem seçim listelerinde görünmüyor. <button class="btn sm" data-act="accReactivate" data-arg="${a.id}">↩ Aktif Et</button></p></div>`:'')+
  `<div class="grid g3" style="margin-bottom:16px">
    <div class="kpi a"><div class="l">Güncel Bakiye</div><div class="v">${fmt0(b)}</div><div class="s">${a.type==='kasa'?'Nakit Kasa':esc(a.bankName||'Banka')}${a.iban?' · IBAN '+esc(a.iban):''}${a.accNo?' · Hesap No '+esc(a.accNo):''}</div></div>
    <div class="kpi p" data-act="goTxCat" data-arg="gelir~~${addDays(todayISO(),-29)}~${todayISO()}" style="cursor:pointer" title="Son 30 günün gelir işlemlerini aç"><div class="l">Son 30 Gün Giriş ↗</div><div class="v">${fmt0(f.into)}</div></div>
@@ -7750,6 +7799,7 @@ function accDetail(id){
    <button class="btn sm gh" data-act="virmanForm" data-arg="${a.id}">⇄ Virman</button>
    <button class="btn sm gh" data-act="accReconcile" data-arg="${a.id}">⚖ Mutabakat</button>
    <button class="btn sm gh" data-act="accForm" data-arg="${a.id}">✎ Düzenle</button>
+   ${_apasif?`<button class="btn sm" data-act="accReactivate" data-arg="${a.id}">↩ Aktif Et</button>`:`<button class="btn sm gh" data-act="accDeactivate" data-arg="${a.id}">⏸ Pasife Al</button>`}
   </div></div>
   ${a.note?`<div class="card"><h2>Not</h2><p style="font-size:13px;white-space:pre-wrap">${esc(a.note)}</p></div>`:''}
   <div id="ekstreBox"></div>`; /* v14-D: accNo ve not artık görünüyor */
@@ -7802,8 +7852,11 @@ function cardDetail(id){
  const _db0=kartDonemBorcu(id,_sr0.from,_sr0.to);
  const _kt0=kartKalanTaksit(id,_sr0.to);   /* v51: dönem sonundan sonrakiler */
  const _sonOde0=nextDueAfter(+c.dueDay,_sr0.to);
- document.getElementById('main').innerHTML= topbar('💳 '+esc(c.name),
+ /* v55: pasif kart detayında ne bir etiket ne de "Aktif Et" düğmesi vardı */
+ const _pasif=(c.active==='0');
+ document.getElementById('main').innerHTML= topbar('💳 '+esc(c.name)+(_pasif?' ⏸':''),
   `<button class="btn gh" data-act="go" data-arg="card">← Kredi Kartları</button>`)+
+ (_pasif?`<div class="card" style="border-left:4px solid var(--warn);padding:10px 14px;margin-bottom:12px"><p class="tiny" style="margin:0">⏸ <b>Bu kart pasif.</b> Borcu ve geçmişi korunuyor, yalnızca yeni harcama/ödeme seçim listelerinde görünmüyor. <button class="btn sm" data-act="cardReactivate" data-arg="${c.id}">↩ Aktif Et</button></p></div>`:'')+
  `<div class="grid g3" style="margin-bottom:16px">
    <div class="kpi ${debt>0?'n':'p'}"><div class="l">Toplam Kalan Borç</div><div class="v">${fmt0(debt)}</div><div class="s">${debt>0?'Son ödeme: '+dTR(due):debt<-0.005?'⚠ kartta fazla ödeme görünüyor':'Borç yok'}</div></div>
    <div class="kpi"><div class="l">Kullanılabilir Limit</div><div class="v">${fmt0(avail)}</div><div class="s">Limit: ${fmt0(c.limit||0)}${_fazla?' · ⚠ '+fmt0(_fazla)+' fazla ödeme':''}</div></div>
@@ -7811,9 +7864,11 @@ function cardDetail(id){
   </div>
   ${kartNegatifUyari(c)}
   <div class="card" style="margin-bottom:14px"><div class="cardBtns" style="margin:0">
-   <button class="btn sm" data-act="cardTxnForm" data-arg="${c.id}~harcama">＋ Harcama</button>
+   ${_pasif?'':`<button class="btn sm" data-act="cardTxnForm" data-arg="${c.id}~harcama">＋ Harcama</button>`}
    <button class="btn sm gh" data-act="cardTxnForm" data-arg="${c.id}~odeme">₺ Ödeme Yap</button>
    <button class="btn sm gh" data-act="cardForm" data-arg="${c.id}">✎ Düzenle</button>
+   ${_pasif?`<button class="btn sm" data-act="cardReactivate" data-arg="${c.id}">↩ Aktif Et</button>`
+            :`<button class="btn sm gh" data-act="cardDeactivate" data-arg="${c.id}">⏸ Pasife Al</button>`}
   </div></div>
   ${c.note?`<div class="card"><h2>Not</h2><p style="font-size:13px;white-space:pre-wrap">${esc(c.note)}</p></div>`:''}
   <div id="cardEkstreBox"></div>`; /* v14-D: kart notu artık görünüyor */
@@ -7823,13 +7878,15 @@ function cardDetail(id){
 function posDetail(id){
  const p=S.pos.find(x=>x.id===id&&!x.deletedAt);if(!p){toast('POS bulunamadı');return;}
  PAGE='pos';_navHi('pos');
+ const _ppasif=(p.active==='0'); /* v55b */
  const a=S.accounts.find(x=>x.id===p.accId)||{};
  const ent=S.posEntries.filter(e=>e.posId===id&&!e.deletedAt).sort((x,y)=>x.date<y.date?1:-1);
  const mo=monthISO();
  const ay=ent.filter(e=>String(e.date||'').startsWith(mo));
  const bek=ent.filter(e=>e.status==='bekliyor');
- document.getElementById('main').innerHTML= topbar('🖥 '+esc(p.name),
+ document.getElementById('main').innerHTML= topbar('🖥 '+esc(p.name)+(_ppasif?' ⏸':''),
   `<button class="btn gh" data-act="go" data-arg="pos">← POS İşlemleri</button>`)+
+ (_ppasif?`<div class="card" style="border-left:4px solid var(--warn);padding:10px 14px;margin-bottom:12px"><p class="tiny" style="margin:0">⏸ <b>Bu POS cihazı pasif.</b> Geçmiş girişleri ve raporları korunuyor, yalnızca yeni POS girişi seçim listelerinde görünmüyor. <button class="btn sm" data-act="posReactivate" data-arg="${p.id}">↩ Aktif Et</button></p></div>`:'')+
  `<div class="grid g3" style="margin-bottom:16px">
    <div class="kpi a"><div class="l">Bu Ay Brüt</div><div class="v">${fmt0(ay.reduce((s,e)=>s+ +e.gross,0))}</div><div class="s">${ay.length} giriş</div></div>
    <div class="kpi n"><div class="l">Bu Ay Komisyon</div><div class="v">${fmt0(ay.reduce((s,e)=>s+ +e.comm,0))}</div><div class="s">Oran: %${p.comm} · blokaj ${p.blokaj} gün</div></div>
@@ -11522,8 +11579,17 @@ function ekstreKategori(aciklama,yon){
 /* ---------- 1) başlat ---------- */
 function ekstreYukle(tur,hedefId){
  if(yetkiYok('kayit.ekle','Ekstre yükleyip kayıt oluşturmak'))return;
- var liste=tur==='kart'?byCo(S.cards,CO).filter(function(c){return c.active!=='0';})
-                       :byCo(S.accounts,CO).filter(function(a){return a.active!=='0';});
+ /* v55b: liste yalnizca AKTIF kayitlari aliyordu. Iki sonucu vardi:
+      1) tek karti/hesabi pasife alan kullanici, kartini ekranda GORDUGU halde
+         "Once bir kredi karti tanimlayin" uyarisi aliyordu;
+      2) hedefId pasif bir kayda isaret ettiginde o kimlik listede olmadigi icin
+         <select> ilk siradaki kaydi gosteriyor, EKSTRE.hedef ise pasif kayitta
+         kaliyordu - yani ekstre, kullanicinin gordugunden BASKA bir karta islenebiliyordu.
+    Pasif kayitlar artik listenin sonunda, basinda "⏸" ile yer alir (kapanan bir
+    kartin son ekstresi hala yuklenebilsin). */
+ var _tumu=tur==='kart'?byCo(S.cards,CO):byCo(S.accounts,CO);
+ var liste=_tumu.filter(function(x){return x.active!=='0';})
+          .concat(_tumu.filter(function(x){return x.active==='0';}));
  if(!liste.length){toast(tur==='kart'?'Önce bir kredi kartı tanımlayın':'Önce bir banka/kasa hesabı tanımlayın');return;}
  /* v48 DENETIM: co - kaydetme aninda CO degismis olabilir; iptal - modal kapaninca
     suren okumanin ekrani geri acmasini engeller. */
@@ -11535,7 +11601,7 @@ function ekstreYukle(tur,hedefId){
    '<div class="fld"><label>'+(tur==='kart'?'Hangi kredi kartının ekstresi?':'Hangi hesabın ekstresi?')+'</label>'+
     '<select id="ekstreHedef">'+liste.map(function(x){
       return '<option value="'+x.id+'"'+(x.id===EKSTRE.hedef?' selected':'')+'>'+
-       esc((tur==='kart'?'💳 ':(x.type==='kasa'?'💵 ':'🏦 '))+x.name)+'</option>';}).join('')+'</select></div>'+
+       esc((x.active==='0'?'⏸ ':'')+(tur==='kart'?'💳 ':(x.type==='kasa'?'💵 ':'🏦 '))+x.name)+'</option>';}).join('')+'</select></div>'+
    '<div class="fld"><label>Ekstre dosyası — fotoğraf, PDF ya da Excel/CSV (birden fazla seçebilirsiniz)</label>'+
     '<input type="file" id="ekstreFile" multiple '+
      'accept="image/*,application/pdf,.pdf,.xlsx,.xls,.xlsm,.ods,.csv,.tsv,.txt"></div>'+
