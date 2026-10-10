@@ -3235,6 +3235,11 @@ function cariTxnForm(cariId,defType,init){
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'nakit',label:'Nakit Hareketi (para gerçekten hesaba girdi/çıktıysa)',type:'select',opts:[['','Yok — sadece cari kaydı (veresiye)'],['gelir','💰 Bu hesaba PARA GİRİŞİ oldu (tahsilat)'],['gider','💸 Bu hesaptan PARA ÇIKIŞI oldu (ödeme)']],def:''},
   {name:'method',label:'Yöntem: kasa / banka / 💳 kredi kartı / 🏛 merkez',type:'select',opts:payMethodOpts(CO,1)},
+  /* v57: KREDİ KARTI TAKSİDİ. Cari ödemesi kredi kartıyla yapıldığında taksit
+     seçilemiyordu (kart kaydı `taksit:1` olarak sabitti) — oysa tedarikçiye taksitli
+     kartla ödeme çok yaygın. Alan yalnızca kart (ya da merkez kartı) seçiliyken görünür. */
+  {name:'taksit',label:'Taksit — yalnızca 💳 kredi kartı ile ödemede geçerlidir',type:'select',
+   opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']],def:1},
   /* v50: KATEGORİ — nakit hareketi varsa kâr/zarar kaydı oluşur, o kayıt bir kaleme
      yazılmalı. Önceden "Diğer Gider" olarak sabitti ve gider raporu detaysız kalıyordu. */
   {name:'cat',label:'Kategori (kâr/zarar raporunda bu kaleme işlenir)',type:'select',
@@ -3246,6 +3251,11 @@ function cariTxnForm(cariId,defType,init){
   if(isMerkezMethod(method)){isCard=false;cardId='';bankAccId='';}
   if(o.nakit&&!method){ toast('⚠ "Nakit Hareketi" seçtiniz ama yöntem seçmediniz — parayı hangi kasa/banka veya kredi kartıyla işlediğinizi seçin; gerçek para hareketi yoksa "Yok — sadece cari kaydı (veresiye)" seçeneğini işaretleyin.'); cariTxnForm(cariId,o.type,o); return; }
   if(isCard&&o.nakit!=='gider'){ toast('💳 Kredi kartı yalnızca ödeme (para çıkışı) için seçilebilir; tahsilat için kasa/banka seçin.'); cariTxnForm(cariId,o.type,o); return; }
+  /* v57: taksit seçili ama yöntem kart değilse sessizce yutmayalım */
+  if(kartTaksitSayisi(o.taksit)>1&&!isCard&&!isMerkezMethod(method)){
+   toast('ℹ Taksit yalnızca kredi kartıyla yapılan ödemelerde uygulanır — bu kayıt tek çekim olarak işlendi');
+   o.taksit=1;
+  }
   /* v50 DENETİM-2: önce "🏛 merkez öder" seçip sonra "Yok (veresiye)"ye dönülmesi
      sessizce düz bir veresiye kaydına dönüşüyordu — kullanıcı ödemeyi yapılmış sanıyordu. */
   if(!o.nakit&&isMerkezMethod(method)){ toast('🏛 Merkez ödemesi için "Nakit Hareketi" alanında "💸 PARA ÇIKIŞI oldu" seçeneğini işaretleyin — ya da yöntemi kasa/bankaya çevirin.'); cariTxnForm(cariId,o.type,o); return; }
@@ -3269,27 +3279,54 @@ function cariTxnForm(cariId,defType,init){
    if(_katGerek())return;
    /* v50: kategori merkez ödemesine de taşınır — şirketin gider raporunda görünsün */
    if(merkezIcerdenOde(CO,{hedef:'cari',cariId:cariId,amount:+sayiOku(o.amount),date:o.date,desc:o.desc||'',
-      cat:o.cat||cariDefCat(c,'gider'),method:merkezMethodOf(method)},(c.name||'Cari')+' ödemesi kaydedildi'))go('cari');
+      cat:o.cat||cariDefCat(c,'gider'),taksit:o.taksit,   /* v57: merkez kartı taksidi buradan da geçsin */
+      method:merkezMethodOf(method)},(c.name||'Cari')+' ödemesi kaydedildi'))go('cari');
    return;
   }
   if(_katGerek())return;
   var ctid=nid();
-  S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:cariId,type:o.type,amount:+sayiOku(o.amount),date:o.date,vade:o.vade,desc:o.desc,nakit:o.nakit||'',accId:bankAccId||'',cardId:cardId||''}));
+  /* v57: tutar TEK yerde kuruşa yuvarlanır. Taksit bölmesi yuvarlanmış tutarı
+     kullanıyordu; cari hareketi ise yuvarlanmamışını — '1500,555' girildiğinde
+     cari defterinde 1500,555, kart ve gider defterinde 1500,56 duruyordu ve
+     kart/cari tutar eşitliğini okuyan kontroller (gxTaksitAyrisma) ayrışıyordu. */
+  var _tutar=Math.round((+sayiOku(o.amount)||0)*100)/100;
+  S.cariTxns.push(stampCreate({id:ctid,co:CO,cariId:cariId,type:o.type,amount:_tutar,date:o.date,vade:o.vade,desc:o.desc,nakit:o.nakit||'',accId:bankAccId||'',cardId:cardId||''}));
   let nakitMsg='';
   /* v50: kategori kullanıcıdan gelir; boşsa cari kartındaki varsayılan, o da yoksa genel */
   var _kat=o.cat||cariDefCat(c,o.nakit==='gelir'?'gelir':'gider')||(o.nakit==='gelir'?'Diğer Gelir':'Diğer Gider');
   if(o.nakit)ensureCat(o.nakit==='gelir'?'gelir':'gider',_kat);
   if(o.nakit&&bankAccId){
-   S.txns.push(stampCreate({id:nid(),co:CO,type:o.nakit,date:o.date,amount:+sayiOku(o.amount),accId:bankAccId,cariId:cariId,cariTxnId:ctid,
+   S.txns.push(stampCreate({id:nid(),co:CO,type:o.nakit,date:o.date,amount:_tutar,accId:bankAccId,cariId:cariId,cariTxnId:ctid,
     cat:_kat,
     desc:(o.nakit==='gelir'?'Cari tahsilat: ':'Cari ödeme: ')+(c.name||'')+(o.desc?' - '+o.desc:'')}));
    nakitMsg=' + nakit hareketi işlendi ('+_kat+')';
   }else if(o.nakit&&isCard){
+   /* v57: TAKSİT. Cari borcu ÖDEME GÜNÜ tam kapanır (yukarıdaki cari hareketi tek ve
+      tam), kart borcu taksit planına girer, ŞİRKETİN GİDERİ ise N aya bölünür —
+      kartın diğer taksitli harcamalarında uygulanan kuralın aynısı.
+      cariTxnId her satıra takılır: tahakkuk modunda skipCariLinked hepsini eler,
+      gider faturadan gelir; bölme tahakkuk raporunu değiştirmez. */
    var cdid=nid();
-   S.cardTxns.push(stampCreate({id:cdid,co:CO,cardId:cardId,type:'harcama',amount:+sayiOku(o.amount),date:o.date,cat:_kat,taksit:1,cariId:cariId,cariTxnId:ctid,desc:'Cari ödemesi: '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
-   S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:+sayiOku(o.amount),accId:'',src:'card',cariId:cariId,cariTxnId:ctid,cardTxnId:cdid,cat:_kat,
-    desc:'Cari ödemesi (kredi kartı): '+(c.name||'')+(o.desc?' - '+o.desc:'')}));
-   nakitMsg=' + kredi kartına işlendi (kart borcu arttı, '+_kat+')';
+   var _N=kartTaksitSayisi(o.taksit);
+   if(_N>1){
+    var _pT=Math.round((_tutar/_N)*100)/100;
+    if(_pT<=0||Math.round((_tutar-_pT*(_N-1))*100)/100<=0)_N=1;   /* bölünemeyecek kadar küçük tutar */
+   }
+   var _cBaz='Cari ödemesi (kredi kartı): '+(c.name||'')+(o.desc?' - '+o.desc:'');
+   S.cardTxns.push(stampCreate({id:cdid,co:CO,cardId:cardId,type:'harcama',amount:_tutar,date:o.date,cat:_kat,taksit:_N,cariId:cariId,cariTxnId:ctid,desc:'Cari ödemesi: '+(c.name||'')+(o.desc?' - '+o.desc:'')+(_N>1?' ('+_N+' taksit)':'')}));
+   if(_N<=1){
+    S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:o.date,amount:_tutar,accId:'',src:'card',cariId:cariId,cariTxnId:ctid,cardTxnId:cdid,cat:_kat,
+     desc:_cBaz}));
+   }else{
+    var _pay=Math.round((_tutar/_N)*100)/100,_top=0;
+    for(var _i=0;_i<_N;_i++){
+     var _parca=(_i===_N-1)?Math.round((_tutar-_top)*100)/100:_pay; _top=Math.round((_top+_pay)*100)/100;
+     S.txns.push(stampCreate({id:nid(),co:CO,type:'gider',date:addMonthsClamped(o.date,_i),amount:_parca,accId:'',
+      src:'card',cariId:cariId,cariTxnId:ctid,cardTxnId:cdid,cat:_kat,taksitNo:(_i+1)+'/'+_N,
+      desc:_cBaz+' (taksit '+(_i+1)+'/'+_N+')'}));
+    }
+   }
+   nakitMsg=' + kredi kartına işlendi (kart borcu arttı, '+_kat+')'+(_N>1?' · gider '+_N+' aya bölündü (aylık ~'+fmt0(_tutar/_N)+')':'');
   }
   const bal=cariBalance(S.cari.find(x=>x.id===cariId));
   if(c.riskLimit&&bal>+c.riskLimit)toast('⚠ Risk limiti aşıldı! Bakiye: '+fmt(bal));
@@ -3299,14 +3336,25 @@ function cariTxnForm(cariId,defType,init){
  setTimeout(function(){ /* veresiye girisinde yontem ve kategori alanlarini gizle */
   var nk=document.querySelector('#mForm select[name="nakit"]'),mt=document.querySelector('#mForm select[name="method"]');
   var kt=document.querySelector('#mForm select[name="cat"]');
+  var tk=document.querySelector('#mForm select[name="taksit"]');   /* v57 */
   if(!nk)return;
-  var mFld=mt?mt.closest('.fld'):null, kFld=kt?kt.closest('.fld'):null;
+  var mFld=mt?mt.closest('.fld'):null, kFld=kt?kt.closest('.fld'):null, tFld=tk?tk.closest('.fld'):null;
   /* v50: yon degisince kategori listesi gelir<->gider arasinda degisir.
      Yanlis listeden secim yapilirsa rapor kalemi bos kalirdi. */
   var upd=function(){
    var acik=!!nk.value;
    if(mFld)mFld.style.display=acik?'':'none';
    if(kFld)kFld.style.display=acik?'':'none';
+   /* v57: taksit yalnızca PARA ÇIKIŞI + kredi kartı (şirket kartı ya da merkez kartı)
+      seçiliyken anlamlı. Gizlenirken değeri de 1'e döner — gizli bir "6 taksit"in
+      sonradan kart seçilince sessizce uygulanmasını önler. */
+   if(tFld){
+    var _m=mt?String(mt.value||''):'';
+    var _kart=(_m.indexOf('card:')===0)||(_m.indexOf('merkez:card:')===0);
+    var _gor=(nk.value==='gider')&&_kart;
+    tFld.style.display=_gor?'':'none';
+    if(!_gor&&tk&&tk.value!=='1')tk.value='1';
+   }
    if(kt&&acik){
     var yon=nk.value==='gelir'?'gelir':'gider';
     if(kt.getAttribute('data-yon')!==yon){
@@ -3318,7 +3366,9 @@ function cariTxnForm(cariId,defType,init){
     }
    }
   };
-  nk.addEventListener('change',upd);upd();
+  nk.addEventListener('change',upd);
+  if(mt)mt.addEventListener('change',upd);   /* v57: yöntem değişince taksit alanı da güncellenir */
+  upd();
  },80);
  odemeBakiyeBind(CO,{dirField:'nakit',hedef:'Seçilen hesabın durumu'}); /* v45 */
 }
@@ -3884,12 +3934,26 @@ function _tahakkukKum(co,from,to){
  for(var j=0;j<S.txns.length;j++){
   var t=S.txns[j];
   if(t.co!==co||t.deletedAt||t.xfer||t.type==='virman'||t.src==='stok')continue;
-  if(!gunGecerli(t.date)||t.date>to)continue;
+  if(!gunGecerli(t.date))continue;   /* v57: üst sınır kontrolü aşağıda, ÖDEME tarihiyle yapılır */
   if(t.kontra)continue;   /* iade kaydı mutabakatta değil, doğrudan düzeltme olarak işlenir */
   var tc=_tahakkukCari(t); if(!tc.ele)continue;
   var a2=txAmt(t); if(!isFinite(a2))continue;
+  /* v57: TAKSİTLİ CARİ ÖDEMESİNDE MUTABAKATIN TARİHİ.
+     Taksitli bir cari ödemesinin gider satırları aylara bölünür, ama cari hesabı
+     ÖDEME GÜNÜ kapanır. Mutabakatın nakit tarafı ödemenin gerçekleştiği tarihi
+     kullanmalı; taksit tarihlerini kullanmak tahakkuk giderini kartın finansman
+     takvimine yayıyordu (ölçüm: Ocak'ta kartla 12 taksit ödenen 120.000'in
+     tahakkukta yalnız 10.000'i Ocak'a yazılıyor, kalanı sonraki aylara
+     dağılıyordu — oysa yükümlülük Ocak'ta doğdu). Böylece bölme, tahakkuk
+     raporunu tek çekim davranışıyla BİREBİR aynı bırakır. */
+  var _td=t.date;
+  if(t.taksitNo&&t.cariTxnId){
+   var _pct=_ctById(t.cariTxnId);
+   if(_pct&&gunGecerli(_pct.date))_td=_pct.date;
+  }
+  if(_td>to)continue;
   var k2=g(tc.cari),y2=(txYon(t)==='gelir')?'g':'x';
-  k2.nT[y2]+=a2; if(t.date<from)k2.nO[y2]+=a2;
+  k2.nT[y2]+=a2; if(_td<from)k2.nO[y2]+=a2;
  }
  return K;
 }
@@ -8629,7 +8693,7 @@ function rMerkez(){
     '</td></tr>';}).join('')+
   '<tr style="background:var(--acc-soft)"><td><b>TOPLAM</b></td><td class="num"><b>'+fmt0(toplamAlacak-toplamBorc)+'</b></td><td class="num"><b>'+fmt0(rows.reduce(function(s,r){return s+r.k;},0))+'</b></td><td colspan="2"></td></tr>'+
   '</tbody></table></div>'+
-  '<p class="tiny" style="margin-top:8px">💸 <b>Şirket Adına Öde:</b> para merkezden çıkar, gider o şirketin kâr/zararına yazılır, şirket merkeze borçlanır. Bu ekrandan <b>doğrudan gider</b>, <b>şirketin carisine ödeme</b>, <b>personel maaş/avans/prim</b>, <b>sabit ödeme (kira/vergi/SGK/fatura)</b>, <b>şirketin kredi kartı borcu</b> ve <b>şirketin kasasına nakit aktarım</b> yapılabilir; merkez kredi kartıyla ödenen doğrudan giderler <b>taksite bölünebilir</b>. ⇄ <b>Nakit Aktar:</b> para merkezden şirketin kasasına geçer (gelir sayılmaz). 💰 <b>Tahsilat:</b> şirket merkeze ödeme yapar, borç düşer.</p></div>':'')+
+  '<p class="tiny" style="margin-top:8px">💸 <b>Şirket Adına Öde:</b> para merkezden çıkar, gider o şirketin kâr/zararına yazılır, şirket merkeze borçlanır. Bu ekrandan <b>doğrudan gider</b>, <b>şirketin carisine ödeme</b>, <b>personel maaş/avans/prim</b>, <b>sabit ödeme (kira/vergi/SGK/fatura)</b>, <b>şirketin kredi kartı borcu</b> ve <b>şirketin kasasına nakit aktarım</b> yapılabilir; merkez kredi kartıyla ödenen <b>doğrudan giderler ve cari ödemeleri taksite bölünebilir</b> (cari borcu ödeme günü tam kapanır, bölünen yalnızca şirketin gideridir). ⇄ <b>Nakit Aktar:</b> para merkezden şirketin kasasına geçer (gelir sayılmaz). 💰 <b>Tahsilat:</b> şirket merkeze ödeme yapar, borç düşer.</p></div>':'')+
  merkezSetupCard()+
  merkezSonIslemlerCard()+
  merkezTaksitCard()+
@@ -8689,7 +8753,22 @@ function merkezOpts(co){ /* şirket içi formlarda "merkez öder" seçenekleri *
 function merkezKayitYaz(coId,o){
  var icId=nid(),isCard=String(o.method).indexOf('card:')===0,cardId=isCard?String(o.method).slice(5):'';
  var amt=Math.round((+sayiOku(o.amount)||0)*100)/100,N=kartTaksitSayisi(o.taksit);   /* v51 */
- if(N>1&&(!isCard||o.hedef!=='gider'))N=1;
+ /* v57: taksit artık CARİ ÖDEMESİNDE de geçerli. Eskiden yalnızca "Doğrudan gider"de
+    açıktı; merkez kredi kartıyla bir şirketin tedarikçisine taksitli ödeme yapılamıyordu
+    (ekranda taksit alanı hiç görünmüyordu). Para hareketi zaten aynı: kart borcu tek
+    seferde doğar ve taksit planına göre ödenir. Tek fark, ŞİRKETİN giderinin aya
+    bölünmesidir — kartın diğer taksitli harcamalarında uygulanan kuralın aynısı.
+    Cari borcu ve merkezin alacağı ÖDEME GÜNÜ TAM kapanır; bölünen yalnızca gider. */
+ var _taksitliHedef=(o.hedef==='gider'||o.hedef==='cari');
+ if(N>1&&(!isCard||!_taksitliHedef))N=1;
+ /* v57: bölünemeyecek kadar küçük tutarda N'i BURADA 1'e indiriyoruz. Eskiden bu kontrol
+    yalnızca gider satırları yazılırken yapılıyordu; merkezin kart kaydı o ana kadar
+    "6 taksit" olarak yazılmış oluyor, kart ekranı 6 taksit gösterirken gider defterinde
+    tek satır duruyordu. */
+ if(N>1){
+  var _pTest=Math.round((amt/N)*100)/100;
+  if(_pTest<=0||Math.round((amt-_pTest*(N-1))*100)/100<=0)N=1;
+ }
  var cmc=coMerkezCari(coId),desc=o.desc||'';
  ensureCat('gider','Grup İçi');
  merkezOdemeYaz({coId:coId,method:o.method,amount:amt,date:o.date,desc:desc,icId:icId,taksit:N,
@@ -8710,10 +8789,29 @@ function merkezKayitYaz(coId,o){
   var _cr=S.cari.find(function(x){return x.id===o.cariId;})||{};
   var _kat=o.cat||cariDefCat(_cr,'gider')||'Diğer Gider';
   ensureCat('gider',_kat);
-  pushRec(S.txns,{id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
-   src:isCard?'merkez-kart':'merkez',cat:_kat,cariId:o.cariId,cariTxnId:_mcId,
-   desc:'🏛 Merkezden ödendi — '+(_cr.name||'Cari')+(desc?' — '+desc:''),
-   ic:true,icId:icId});
+  var _cDesc='🏛 Merkezden ödendi — '+(_cr.name||'Cari')+(desc?' — '+desc:'');
+  if(N<=1){
+   pushRec(S.txns,{id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
+    src:isCard?'merkez-kart':'merkez',cat:_kat,cariId:o.cariId,cariTxnId:_mcId,
+    desc:_cDesc,ic:true,icId:icId});
+  }else{
+   /* v57: gider N aya bölünür. cariTxnId HER satıra takılır — tahakkuk modunda
+      skipCariLinked hepsini eler, gider faturadan gelir; böylece bölme tahakkuk
+      raporunu değiştirmez (tek satırlı eski davranışla aynı sonucu verir). */
+   var _per=Math.round((amt/N)*100)/100,_acc=0;
+   if(_per<=0||Math.round((amt-_per*(N-1))*100)/100<=0){_per=amt;N=1;}
+   if(N<=1){
+    pushRec(S.txns,{id:nid(),co:coId,type:'gider',date:o.date,amount:amt,accId:'',
+     src:isCard?'merkez-kart':'merkez',cat:_kat,cariId:o.cariId,cariTxnId:_mcId,
+     desc:_cDesc,ic:true,icId:icId});
+   }else for(var _ti=0;_ti<N;_ti++){
+    var _part=(_ti===N-1)?Math.round((amt-_acc)*100)/100:_per; _acc=Math.round((_acc+_per)*100)/100;
+    pushRec(S.txns,{id:nid(),co:coId,type:'gider',date:addMonthsClamped(o.date,_ti),amount:_part,accId:'',
+     src:'merkez-kart',cat:_kat,cariId:o.cariId,cariTxnId:_mcId,
+     taksitNo:(_ti+1)+'/'+N,cardTxnId:mcardId,
+     desc:_cDesc+' (taksit '+(_ti+1)+'/'+N+')',ic:true,icId:icId});
+   }
+  }
  }else if(o.hedef==='kart'){
   pushRec(S.cardTxns,{id:nid(),co:coId,cardId:o.hedefCard,type:'odeme',amount:amt,date:o.date,
    desc:'🏛 Merkezden kart borcu ödemesi'+(desc?' — '+desc:''),ic:true,icId:icId});
@@ -8822,7 +8920,7 @@ function merkezOdeForm(coId,init){
    ['kasa','🏦 Şirketin KASASINA / BANKASINA para aktarımı — gelir değildir']],def:'gider'},
   {row:[{name:'amount',label:'Tutar (₺)',type:'number',req:1,min:0.01},{name:'date',label:'Tarih',type:'date',def:todayISO(),req:1}]},
   {name:'method',label:'Merkezde hangi hesaptan / kartla ödendi?',type:'select',req:1,opts:payMethodOpts('merkez')},
-  {name:'taksit',label:'Taksit — yalnızca merkez KREDİ KARTI + “Doğrudan gider” seçiminde geçerlidir',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']],def:1},
+  {name:'taksit',label:'Taksit — merkez KREDİ KARTI ile “Doğrudan gider” veya “Carisine ödeme” seçiminde geçerlidir',type:'select',opts:[[1,'Tek çekim'],[2,'2 taksit'],[3,'3 taksit'],[4,'4 taksit'],[5,'5 taksit'],[6,'6 taksit'],[9,'9 taksit'],[12,'12 taksit']],def:1},
   /* v50: kategori artik "Carisine odeme" icin de gerekli — o odeme sirketin
      kar/zarar defterine yazildigindan hangi kaleme dusecegi belirtilmeli. */
   {name:'cat',label:'Gider kategorisi (“Doğrudan gider” ve “Carisine ödeme” için)',type:'select',opts:[['','— Seçin —']].concat(catOptsUser('gider'))},
@@ -8875,7 +8973,7 @@ function merkezOdeForm(coId,init){
   if(o.hedef!=='gider'&&o.hedef!=='cari')o.cat='';  /* v50: cari ödemesi de kategori taşır */
   if(o.hedef!=='maas'&&o.hedef!=='sabit')o.period='';
   var isCard=String(o.method).indexOf('card:')===0;
-  if((+o.taksit||1)>1&&(!isCard||o.hedef!=='gider'))toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ödemelerinde uygulanır — bu kayıt tek çekim olarak işlendi');
+  if((+o.taksit||1)>1&&(!isCard||(o.hedef!=='gider'&&o.hedef!=='cari')))toast('ℹ Taksit yalnızca merkez kredi kartıyla yapılan “Doğrudan gider” ve “Carisine ödeme” işlemlerinde uygulanır — bu kayıt tek çekim olarak işlendi');
   var r=merkezKayitYaz(coId,o);
   save();
   toast('✅ '+fmt0(amt)+' merkezden ödendi — '+coName(coId)+' merkeze borçlandı'+(r.N>1?' · gider '+r.N+' aya bölündü (aylık ~'+fmt0(amt/r.N)+')':''));
@@ -9439,7 +9537,7 @@ function merkezOdeBind(coId){
   fldShow('fixedId',hedef==='sabit');fldShow('period',hedef==='sabit'||hedef==='maas'); /* v41: maaş dönemi de seçilebilmeli */
   fldShow('hedefCard',hedef==='kart');
   fldShow('hedefAcc',hedef==='kasa');
-  fldShow('taksit',hedef==='gider'&&isCard);
+  fldShow('taksit',(hedef==='gider'||hedef==='cari')&&isCard);   /* v57: cari ödemesi de taksitlenebilir */
   /* otomatik tutar */
   if(hedef==='sabit'){var fx=S.fixed.find(function(x){return x.id===fldVal('fixedId');});if(fx&&+sayiOku(fx.amount)>0)fldAuto('amount',fx.amount);}
   if(hedef==='maas'&&fldVal('stype')==='maas'){var st=S.staff.find(function(x){return x.id===fldVal('staffId');});if(st&&+st.salary>0)fldAuto('amount',st.salary);}
@@ -9456,7 +9554,7 @@ function merkezOdeBind(coId){
   }
   /* önizleme */
   var amt=parseAmt(fldVal('amount'))||0,date=fldVal('date')||todayISO(),N=+fldVal('taksit')||1;
-  if(!(hedef==='gider'&&isCard))N=1;
+  if(!((hedef==='gider'||hedef==='cari')&&isCard))N=1;   /* v57 */
   var rows=[],warns=[];
   if(isCard){
    var c=S.cards.find(function(x){return x.id===cardId;});
@@ -9475,7 +9573,11 @@ function merkezOdeBind(coId){
    var cr=S.cari.find(function(x){return x.id===fldVal('cariId');});
    if(cr){var yb=cariBalance(cr)+amt;
     rows.push('<b>'+esc(coName(coId))+'</b> · '+esc(cr.name)+' cari borcu kapanıyor: '+fmt0(cariBalance(cr))+' → <b>'+fmt0(yb)+'</b>');
-    rows.push('<b>'+esc(coName(coId))+'</b> gider defterine <b>'+esc(fldVal('cat')||'— kategori seçin —')+'</b> kalemiyle yazılır — artık gider raporunda görünür (tahakkuk modunda çift saymaz)');
+    rows.push('<b>'+esc(coName(coId))+'</b> gider defterine <b>'+esc(fldVal('cat')||'— kategori seçin —')+'</b> kalemiyle yazılır — artık gider raporunda görünür (tahakkuk modunda çift saymaz)'
+     +(N>1?' → <b>'+N+' taksite bölünür</b> (aylık ~'+fmt0(amt/N)+')':''));
+    /* v57: taksit alanı artık burada da görünüyor; önizleme bunun gidere ne yaptığını
+       söylemeliydi — cari borcu TAM kapanır, bölünen yalnızca gider satırlarıdır. */
+    if(N>1)rows.push('Cari borcu <b>bugün tam kapanır</b>, kart borcu '+N+' taksite girer; aya bölünen yalnızca şirketin <b>gideridir</b>');
     if(yb>0.01)warns.push(esc(cr.name)+' bu ödemeden sonra BİZE '+fmt0(yb)+' borçlu görünecek — fazla ödeme yapıyor olabilirsiniz');
    }else warns.push('Hangi cariye ödeme yapıldığını seçin');
   }else if(hedef==='kart'){
@@ -13348,12 +13450,22 @@ function gdEkstreCift(co){
 
 /* ---------- 5) AYNI CARİ HAREKETİNE BAĞLI İKİ NAKİT KAYDI (kesin) ---------- */
 function gdCariTxnCift(co){
+ /* v57 KRİTİK DÜZELTME — İKİ HATA BİRDEN.
+    1) Bu kural TÜM S.txns'i tarıyordu, yani GİDER satırlarını da. Ekranın
+       bulduğu tutar CİRODAN düşülüyor (rGelirDen: gelir − kesin). Bir tedarikçi
+       ödemesi 12 taksite bölündüğünde 11 satır × tutar "kesin fazla gelir"
+       sayılıp ciro o kadar düşük gösteriliyordu. Ekranın diğer tüm kuralları
+       gdGelirKayitlari (yalnız gelir) kullanıyor; bu da artık onu kullanıyor.
+       Gider tarafındaki aynı kontrol Gider Denetimi'ndeki gxCariCift'tir.
+    2) Taksit dizisi mükerrer sanılıyordu — gxCariCift ile aynı muafiyet. */
  var g={},out=[];
- S.txns.forEach(function(t){
-  if(t.co!==co||t.deletedAt||!t.cariTxnId)return;
-  (g[t.cariTxnId]=g[t.cariTxnId]||[]).push(t);
+ gdGelirKayitlari(co).forEach(function(t){
+  if(!t.cariTxnId)return;
+  var G=g[t.cariTxnId]||(g[t.cariTxnId]={anah:{},kayit:[]});
+  G.anah[t.taksitNo?('T:'+(t.cardTxnId||t.cariTxnId)):('X:'+t.id)]=1;
+  G.kayit.push(t);
  });
- Object.keys(g).forEach(function(k){ if(g[k].length>1)out=out.concat(g[k].slice(1)); });
+ Object.keys(g).forEach(function(k){ if(Object.keys(g[k].anah).length>1)out=out.concat(g[k].kayit.slice(1)); });
  return out;
 }
 
@@ -13766,9 +13878,25 @@ function gxEkstreMi(t){return !!(t&&(t.ekstre||t.ekstreGrup));}
 
 /* ---------- 1) AYNI CARİ HAREKETİNE BAĞLI İKİ GİDER (kesin) ---------- */
 function gxCariCift(co){
+ /* v57 KRİTİK DÜZELTME — TAKSİTLİ CARİ ÖDEMESİ "KESİN FAZLA" SANILIYORDU.
+    Taksitli bir cari ödemesi aynı cari hareketine bağlı N gider satırı yazar
+    (ödeme tek, gider aylara bölünmüş). Bu kural yalnızca "aynı cariTxnId'de
+    1'den fazla satır" diyordu; 12 taksitli bir tedarikçi ödemesi 12 satır =
+    "kesin fazla" olarak işaretleniyor, ekran da "Fazla kaydı silin" diyordu.
+    Kullanıcı bunu uygularsa GERÇEK gideri siler (üstelik del() cardTxnId
+    üzerinden tüm diziyi birden götürür). Kardeş kurallarda bu muafiyet vardı
+    (gxKartCift: !t.taksitNo, gxAyniGun: her üyesi taksitli grubu atlar).
+    Artık aynı taksit dizisinin (cariTxnId + cardTxnId) tüm satırları TEK
+    mantıksal kayıt sayılır; gerçek mükerrer (iki ayrı kayıt, ya da bir dizi +
+    bir fazladan satır) yine yakalanır. */
  var g={},out=[];
- gxGiderKayitlari(co).forEach(function(t){ if(t.cariTxnId)(g[t.cariTxnId]=g[t.cariTxnId]||[]).push(t); });
- Object.keys(g).forEach(function(k){ if(g[k].length>1)out=out.concat(g[k]); });
+ gxGiderKayitlari(co).forEach(function(t){
+  if(!t.cariTxnId)return;
+  var G=g[t.cariTxnId]||(g[t.cariTxnId]={anah:{},kayit:[]});
+  G.anah[t.taksitNo?('T:'+(t.cardTxnId||t.cariTxnId)):('X:'+t.id)]=1;
+  G.kayit.push(t);
+ });
+ Object.keys(g).forEach(function(k){ if(Object.keys(g[k].anah).length>1)out=out.concat(g[k].kayit); });
  return out;
 }
 
