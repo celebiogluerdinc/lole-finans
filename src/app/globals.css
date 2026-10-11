@@ -406,3 +406,21 @@ body[data-co=merkez] .coSwitch .dot{background:#0b5f6b}
 .g5{grid-template-columns:repeat(5,1fr)}
 @media(max-width:1100px){.g5{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:760px){.g5{grid-template-columns:1fr 1fr}}
+
+/* ═══════ v58 — EKSTRE YEKÛN SATIRI ve AY AY KIRILIM ═══════
+   Şikâyet: "ekstrelerde altta yekûnler yok". Yekûn artık <tfoot> olarak basılır;
+   tablo kaydırılırken ya da yazdırılırken satırlardan görsel olarak ayrılsın. */
+tfoot.eksYekun td{background:var(--acc-soft);border-top:2px solid var(--acc);font-size:12.5px;padding:7px 10px}
+tfoot.eksYekun tr.eksNet td{background:var(--acc);color:#fff;border-top:0}
+tfoot.eksYekun tr.eksNet td b{color:#fff}
+tfoot.eksYekun tr:not(.eksNet)+tr:not(.eksNet) td{border-top:1px solid rgba(0,0,0,.06)}
+tr.eksAyBas td{background:#eef1f7;font-size:12px;padding:5px 10px;border-top:1px solid rgba(0,0,0,.08)}
+.eksFiltre{flex-wrap:wrap;gap:6px}
+.eksFiltre select,.eksFiltre input{font-size:12.5px}
+@media print{
+ .eksFiltre{display:none!important}
+ tfoot.eksYekun td{background:#f0f0f0!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ tfoot.eksYekun tr.eksNet td{background:#333!important;color:#fff!important}
+ tfoot.eksYekun tr.eksNet td b{color:#fff!important}
+ tr.eksAyBas td{background:#e8e8e8!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}

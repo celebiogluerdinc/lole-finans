@@ -2347,19 +2347,30 @@ function virmanForm(fromId){
 }
 /* v33: ekstre tarih araligi — parametresiz cagri (accDetail) eski "Tumu" davranisini korur */
 var _accEk={id:null,from:'',to:''};
-function accEkFrom(v){if(_accEk.id)accEkstre(_accEk.id,v,_accEk.to);}
-function accEkTo(v){if(_accEk.id)accEkstre(_accEk.id,_accEk.from,v);}
-function accEkPreset(id,k){if(k==='tum')accEkstre(id,'','');else{const r=rangePreset(k);accEkstre(id,r.from,r.to);}}
-function accEkstre(id,from,to){ /* v46: satırlara bağlantı çipleri eklendi */
+/* v58b: v57 süzgeç kancaları artık ekstre araç takımına yönlendirilir — eski bir
+   yayından ya da kaydedilmiş bir kısayoldan çağrılırsa sessizce kırılmasın. */
+function accEkFrom(v){if(_accEk.id){eksD('acc').from=v||'';eksKaydet();accEkstre(_accEk.id);}}
+function accEkTo(v){if(_accEk.id){eksD('acc').to=v||'';eksKaydet();accEkstre(_accEk.id);}}
+function accEkPreset(id,k){var d=eksD('acc');if(k==='tum'){d.from='';d.to='';}else{var r=rangePreset(k);d.from=r.from;d.to=r.to;}eksKaydet();accEkstre(id);}
+function accEkstre(id,from,to){
+ /* v58 — EKSTRE GELİŞTİRMESİ (bkz. ekstre araç takımı başındaki not).
+    Eskiden: tarih süzgeci vardı ama ALTTA YEKÛN YOKTU; aralığın toplam girişi,
+    toplam çıkışı ve net hareketi hiçbir yerde toplanmıyordu. Arama, tür süzgeci,
+    ay ay kırılım ve Excel çıktısı da yoktu.
+    Bakiye kolonu DAİMA hesabın gerçek yürüyen bakiyesidir (arama/tür süzgeci onu
+    bozmaz); yekûn ise süzgeçten geçen satırları toplar ve neyi topladığını yazar. */
  const a=S.accounts.find(x=>x.id===id);if(!a)return;
- from=from||'';to=to||'';
+ eksKayitDegisti('acc',id,_accEk&&_accEk.id);
+ const d=eksD('acc');
+ if(from!==undefined||to!==undefined){ d.from=from||''; d.to=to||''; }
+ from=d.from;to=d.to;
  _accEk={id:id,from:from,to:to};
  const all=S.txns.filter(t=>t.co===CO&&!t.deletedAt&&(t.accId===id||t.accId2===id)).sort((x,y)=>x.date<y.date?-1:1);
  let devir=0,bekleyen=0;const list=[];
  for(const t of all){
   let delta=0;
   if(t.type==='gelir')delta=+sayiOku(t.amount); else if(t.type==='gider')delta=-sayiOku(t.amount);
-  else delta=(t.accId===id?-1:1)*t.amount;
+  else delta=(t.accId===id?-1:1)*sayiOku(t.amount);
   var _ed=t.valueDate||t.date; // v14-R6: accBalance/accSeries valör gününü kullanıyordu, ekstre kullanmıyordu
   if(_ed>todayISO()){bekleyen+=delta;continue;} // valörü gelmemiş (POS blokajı) — bakiyeye henüz girmez
   if(from&&_ed<from){devir+=delta;continue;} // aralik oncesi net etki -> donem basi devir
@@ -2367,27 +2378,84 @@ function accEkstre(id,from,to){ /* v46: satırlara bağlantı çipleri eklendi *
   list.push({t:t,delta:delta});
  }
  const donemBasi=(+a.opening||0)+devir;
+ /* Yürüyen bakiye ARALIĞIN TAMAMI üzerinden hesaplanır; arama/tür süzgeci yalnız
+    GÖSTERİMİ daraltır. Böylece süzgeçli bir satırın yanındaki bakiye hâlâ hesabın
+    o gün gerçekte neydiği olur. */
  let run=donemBasi;
- const rows=list.map(({t,delta})=>{
-  run+=delta;
-  const _bg=(typeof baglantiCipleri==='function')?baglantiCipleri(t,{noTxn:1}):''; /* v46: bağlı kayda tek tıkla git */
-  return `<tr><td>${dTR(t.date)}</td><td>${esc(t.desc||t.cat||(t.type==='virman'?'Virman':''))}${_bg?`<div class="tiny" style="margin-top:3px">${_bg}</div>`:''}</td><td class="num" style="color:${delta>=0?'var(--pos)':'var(--neg)'}">${fmt(delta)}</td><td class="num">${fmt(run)}</td>
+ const tam=[];
+ for(const x of list){ run+=x.delta; tam.push({t:x.t,delta:x.delta,bak:run}); }
+ const donemSonu=run;
+ /* --- süzgeçler --- */
+ const gos=tam.filter(function(x){return eksAccGecer(x.t,x.delta,d);});
+ /* --- yekûn: GÖSTERİLEN DEĞİL, SÜZGEÇTEN GEÇEN TÜM satırlardan --- */
+ const yGiris=gos.filter(x=>x.delta>0).reduce((s2,x)=>s2+x.delta,0);
+ const yCikis=gos.filter(x=>x.delta<0).reduce((s2,x)=>s2-x.delta,0);
+ const yNet=Math.round((yGiris-yCikis)*100)/100;
+ const kirpik=(!d.hepsi&&gos.length>EKS_LIMIT);
+ const ciz=kirpik?gos.slice(gos.length-EKS_LIMIT):gos;
+ const satirHtml=function(x){
+  const t=x.t,delta=x.delta;
+  const _bg=(typeof baglantiCipleri==='function')?baglantiCipleri(t,{noTxn:1}):'';
+  return `<tr><td>${dTR(t.date)}${(t.valueDate&&t.valueDate!==t.date)?'<div class="tiny">valör '+dTR(t.valueDate)+'</div>':''}</td><td>${esc(t.desc||t.cat||(t.type==='virman'?'Virman':''))}${t.taksitNo?' <span class="chip w">taksit '+esc(t.taksitNo)+'</span>':''}${_bg?`<div class="tiny" style="margin-top:3px">${_bg}</div>`:''}</td><td class="num" style="color:${delta>=0?'var(--pos)':'var(--neg)'}">${fmt(delta)}</td><td class="num">${fmt(x.bak)}</td>
   <td class="rowact">${t.type!=='virman'?'<button data-act="editTxn" data-arg="'+t.id+'">✎</button>':''}<button data-act="del" data-arg="tx~${t.id}">🗑</button></td></tr>`;
- }).reverse().join('')
- +(from?`<tr style="background:var(--acc-soft)"><td>${dTR(from)}</td><td><b>Dönem başı devir</b> <span class="tiny">açılış ${fmt(a.opening)} + önceki hareketler ${fmt(devir)}</span></td><td class="num"></td><td class="num"><b>${fmt(donemBasi)}</b></td><td class="rowact"></td></tr>`:'');
- const filt=`<div class="filters" style="margin-bottom:8px"><span class="mut" style="align-self:center">Aralık:</span>
-   <input type="date" value="${from}" data-actv="accEkFrom"><input type="date" value="${to}" data-actv="accEkTo">
-   <button class="btn sm gh" data-act="accEkPreset" data-arg="${id}~ay">Bu Ay</button>
-   <button class="btn sm gh" data-act="accEkPreset" data-arg="${id}~gecenAy">Geçen Ay</button>
-   <button class="btn sm ${(!from&&!to)?'':'gh'}" data-act="accEkPreset" data-arg="${id}~tum">Tümü</button></div>`;
- var _ebx=document.getElementById('ekstreBox'); if(!_ebx)return; // v14-D3: kutu yoksa sessizce çık (rAcc'teki ölü div kaldırıldı)
+ };
+ let rows;
+ if(d.ay){
+  rows=eksAyGrupla(ciz.map(function(x){return {ay:String((x.t.valueDate||x.t.date)||'').slice(0,7),html:satirHtml(x),a:x.delta>0?x.delta:0,b:x.delta<0?-x.delta:0};}),
+   {kolon:5,yon:'yeni',etiket:['giriş','çıkış']});
+ }else{
+  rows=ciz.map(satirHtml).reverse().join('');
+ }
+ rows+=(from?`<tr style="background:var(--acc-soft)"><td>${dTR(from)}</td><td><b>Dönem başı devir</b> <span class="tiny">açılış ${fmt(a.opening)} + önceki hareketler ${fmt(devir)}</span></td><td class="num"></td><td class="num"><b>${fmt(donemBasi)}</b></td><td class="rowact"></td></tr>`:'');
+ const yekun=eksYekun({kolon:5,solKolon:2,kalemler:[
+   {et:'Toplam giriş',tutar:yGiris,renk:'pos'},
+   {et:'Toplam çıkış',tutar:-yCikis,renk:'neg'},
+   {et:'NET HAREKET',tutar:yNet,renk:yNet>=0?'pos':'neg',vurgu:1,
+    not:gos.length+' hareket · '+eksAralikMetni('acc'),
+    sag:(from||to)?('Dönem sonu: '+fmt(donemSonu)):('Bakiye: '+fmt(donemSonu))}
+  ],notSatiri:(d.q||d.tur)?'ℹ Bakiye kolonu hesabın <b>gerçek</b> yürüyen bakiyesidir; yekûn ise yalnızca süzgeçten geçen '+gos.length+' hareketi toplar.':''});
+ var _ebx=document.getElementById('ekstreBox'); if(!_ebx)return; // v14-D3: kutu yoksa sessizce çık
  _ebx.innerHTML=
   `<div class="card"><h2>Ekstre — ${esc(a.name)} <button class="btn sm gh" data-act="printSection" data-arg="ekstreBox~Hesap Ekstresi — ${_pArg(a.name)}~${dTR(from)} – ${dTR(to)}" title="Yalnızca bu ekstreyi yazdırır — sayfanın tamamını değil">🖨 Ekstreyi Yazdır</button></h2>
-   ${filt}
+   ${eksCubuk('acc',{presets:['ay','gecenAy','g30','yil'],excel:'eksExcelAcc'})}
    ${bekleyen?`<div class="tiny" style="margin-bottom:6px;color:var(--warn)">⏳ Valör günü gelmemiş (POS blokajı vb.) <b>${fmt(bekleyen)}</b> bu bakiyeye henüz dahil değil.</div>`:''}
-   <div class="mut" style="margin-bottom:8px">Açılış bakiyesi: <b>${fmt(a.opening)}</b>${(from||to)?' · Dönem başı: <b>'+fmt(donemBasi)+'</b> · Dönem sonu: <b>'+fmt(run)+'</b>':' · Güncel bakiye: <b>'+fmt(run)+'</b>'} · ${list.length} hareket</div>
-   ${rows?'<table><thead><tr><th>Tarih</th><th>Açıklama</th><th class="num">Tutar</th><th class="num">Bakiye</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody></table>':'<div class="empty">Bu hesapta '+((from||to)?'seçili aralıkta ':'')+'hareket yok.</div>'}</div>`;
+   <div class="mut" style="margin-bottom:8px">Açılış bakiyesi: <b>${fmt(a.opening)}</b>${(from||to)?' · Dönem başı: <b>'+fmt(donemBasi)+'</b> · Dönem sonu: <b>'+fmt(donemSonu)+'</b>':' · Güncel bakiye: <b>'+fmt(donemSonu)+'</b>'} · ${list.length} hareket${(d.q||d.tur)?' · süzgeçte '+gos.length:''}</div>
+   ${(gos.length||from)?'<table><thead><tr><th>Tarih</th><th>Açıklama</th><th class="num">Tutar</th><th class="num">Bakiye</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody>'+yekun+'</table>'+eksSinirNotu('acc',gos.length,ciz.length):'<div class="empty"><b>Hareket yok</b>'+((d.q||d.tur)?'Süzgece uyan hareket yok — <button class="btn sm" data-act="eksTemizle" data-arg="acc">✕ Süzgeçleri temizle</button>':'Bu hesapta '+((from||to)?'seçili aralıkta ':'')+'hareket yok.')+'</div>'}</div>`;
  try{document.getElementById('ekstreBox').scrollIntoView({behavior:'smooth'});}catch(e){}
+}
+/* v58: hesap ekstresinin SÜZGEÇLİ Excel çıktısı — ekranda ne görünüyorsa o iner */
+function eksExcelAcc(){
+ if(!_accEk||!_accEk.id){toast('Önce bir hesap ekstresi açın');return;}
+ const a=S.accounts.find(x=>x.id===_accEk.id);if(!a){toast('Hesap bulunamadı');return;}
+ const d=eksD('acc');
+ const all=S.txns.filter(t=>t.co===CO&&!t.deletedAt&&(t.accId===_accEk.id||t.accId2===_accEk.id)).sort((x,y)=>x.date<y.date?-1:1);
+ let devir=0,run=0;const tam=[];
+ for(const t of all){
+  let delta=0;
+  if(t.type==='gelir')delta=+sayiOku(t.amount); else if(t.type==='gider')delta=-sayiOku(t.amount);
+  else delta=(t.accId===_accEk.id?-1:1)*sayiOku(t.amount);
+  const _ed=t.valueDate||t.date;
+  if(_ed>todayISO())continue;
+  if(d.from&&_ed<d.from){devir+=delta;continue;}
+  if(d.to&&_ed>d.to)continue;
+  tam.push({t:t,delta:delta});
+ }
+ run=sayiOku(a.opening)+devir;   /* v58b: bare + yerine sayiOku */
+ const sat=[];let g=0,c=0;
+ for(const x of tam){
+  run+=x.delta;
+  if(!eksAccGecer(x.t,x.delta,d))continue;
+  if(x.delta>0)g+=x.delta; else c-=x.delta;
+  sat.push([x.t.date,x.t.valueDate||'',x.t.type,x.t.cat||'',x.t.desc||'',x.t.doc||'',eksSayi(x.delta),eksSayi(run),x.t.taksitNo||'']);
+ }
+ if(!sat.length){toast('Süzgece uyan hareket yok');return;}
+ eksCsvIndir(eksDosyaAdi('hesap-ekstre',a.name),
+  ['Tarih','Valör','Tür','Kategori','Açıklama','Belge No','Tutar','Bakiye','Taksit'],sat,
+  [['','','','','TOPLAM GİRİŞ','',eksSayi(g)],
+   ['','','','','TOPLAM ÇIKIŞ','',eksSayi(-c)],
+   ['','','','','NET HAREKET','',eksSayi(g-c)],
+   ['','','','','DÖNEM SONU BAKİYE','',eksSayi(run)]],
+  [['Hesap Ekstresi',a.name],['Şirket',coName(CO)],['Aralık / süzgeç',eksAralikMetni('acc')],['Hareket sayısı',String(sat.length)]]);
 }
 
 /* ---------- GELİR-GİDER ---------- */
@@ -2868,24 +2936,59 @@ function cardStatementRange(c,ref){ // v14-Y3: cutDay zorunlu alandı ama hiçbi
  return {from:start,to:end};
 }
 function cardEkstre(id){
+ /* v58 — EKSTRE GELİŞTİRMESİ. Kart ekstresinde HİÇ tarih süzgeci yoktu: hep tüm
+    geçmiş geliyor, başarım için sessizce son 200 satırda kesiliyordu. Alt yekûn da
+    yoktu — aralığın toplam harcaması, toplam ödemesi ve neti hiçbir yerde
+    toplanmıyordu. Artık diğer ekstrelerle aynı süzgeç çubuğu var; "📆 Kesim Dönemi"
+    düğmesi kartın güncel hesap kesim aralığını seçer. */
  const c=S.cards.find(x=>x.id===id);if(!c)return;
- const list=S.cardTxns.filter(t=>t.cardId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
+ eksKayitDegisti('card',id,_cardEk.id);
+ _cardEk={id:id};
+ const d=eksD('card');
+ const tumu=S.cardTxns.filter(t=>t.cardId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
  const _sr=cardStatementRange(c); // içinde bulunulan hesap kesim dönemi
- /* v51: dönem hareketi artık TAKSİTE GÖRE hesaplanır. Eskiden 6 taksitli bir
-    harcamanın TAMAMI alındığı ayın dönem borcuna yazılıyordu. */
+ /* v51: dönem hareketi TAKSİTE GÖRE hesaplanır (üst KPI'lar daima güncel dönemi anlatır,
+    aşağıdaki süzgeçten etkilenmez — yoksa "bu dönemin ekstre borcu" süzgece göre değişir
+    ve kullanıcı ödeyeceği tutarı yanlış okur). */
  const _db=kartDonemBorcu(id,_sr.from,_sr.to);
- const _donBorc=_db.net;
- /* v51 DENETİM: referans BUGÜN değil DÖNEM SONU — yoksa içinde bulunulan dönemin
-    taksidi hem "Bu Dönemin Ekstresi" hem "Gelecek Taksitler" kutusunda sayılıyordu. */
  const _kt=kartKalanTaksit(id,_sr.to);
  const _toplam=cardDebt(c);
- const _sonOde=nextDueAfter(+c.dueDay,_sr.to);   /* bu dönemin son ödeme günü */
- /* v51 DENETİM (başarım): 20.000 hareketli bir kartta ekstre 17 saniye donuyordu —
-    satır sınırı yoktu ve her satır için taksit planı İKİ kez üretiliyordu. */
- const _LIM=200;
- const _gos=list.slice(0,_LIM);
+ const _sonOde=nextDueAfter(+c.dueDay,_sr.to);
+ /* --- süzgeçler --- */
+ const gos=tumu.filter(function(t){return eksCardGecer(t,d);});
+ /* --- yekûn: süzgeçten geçen TÜM satırlar (gösterilenden değil) --- */
+ const yHarcama=gos.filter(t=>t.type==='harcama').reduce((s2,t)=>s2+sayiOku(t.amount),0);
+ const yOdeme=gos.filter(t=>t.type==='odeme').reduce((s2,t)=>s2+sayiOku(t.amount),0);
+ const yNet=Math.round((yHarcama-yOdeme)*100)/100;
+ const taksitliAdet=gos.filter(t=>t.type==='harcama'&&kartTaksitSayisi(t.taksit)>1).length;
+ const kdvTop=gos.filter(t=>t.type==='harcama'&&+t.vat>0)
+   .reduce(function(s2,t){var v=+t.vat||0;return s2+sayiOku(t.amount)*v/(100+v);},0);
+ /* v51 DENETİM (başarım): 20.000 hareketli bir kartta ekstre 17 saniye donuyordu */
+ const kirpik=(!d.hepsi&&gos.length>EKS_LIMIT);
+ const _gos=kirpik?gos.slice(0,EKS_LIMIT):gos;
  const _plan={};
  _gos.forEach(function(t){ if(t.type==='harcama'&&kartTaksitSayisi(t.taksit)>1)_plan[t.id]=kartTaksitPlani(t); });
+ const satirHtml=function(t){
+  return `<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='odeme'?'p':'n'}">${t.type==='odeme'?'Ödeme':'Harcama'}</span> ${esc(t.desc||t.cat||'')}${(+t.taksit||1)>1?' <span class="chip w">'+t.taksit+' taksit</span>':''}${t.vat?' <span class="chip">KDV %'+esc(t.vat)+'</span>':''}${(typeof baglantiCipleri==='function')?('<div class="tiny" style="margin-top:3px">'+baglantiCipleri({cariId:t.cariId,staffTxnId:t.staffTxnId,stokTxnId:t.stokTxnId,assetId:t.assetId,icId:t.icId})+'</div>'):''}${_plan[t.id]?kartTaksitNotu(t,_sr.from,_sr.to,_plan[t.id]):''}</td><td class="num" style="color:${t.type==='odeme'?'var(--pos)':'var(--neg)'}">${t.type==='odeme'?'-':''}${fmt(t.amount)}${_plan[t.id]?'<div class="tiny" style="font-weight:400;color:var(--ink2)">aylık '+fmt(_plan[t.id][0].amount)+'</div>':''}</td>
+    <td class="rowact"><button data-act="del" data-arg="cardT~${t.id}">🗑</button></td></tr>`;
+ };
+ let rows;
+ if(d.ay){
+  rows=eksAyGrupla(_gos.map(function(t){return {ay:String(t.date||'').slice(0,7),html:satirHtml(t),
+    a:t.type==='harcama'?sayiOku(t.amount):0,b:t.type==='odeme'?sayiOku(t.amount):0};}),
+   {kolon:4,yon:'eski',etiket:['harcama','ödeme']});
+ }else{
+  rows=_gos.map(satirHtml).join('');
+ }
+ const yekun=eksYekun({kolon:4,solKolon:2,kalemler:[
+   {et:'YEKÛN — toplam harcama',tutar:yHarcama,renk:'neg',not:gos.length+' hareket · '+eksAralikMetni('card')},
+   {et:'YEKÛN — toplam ödeme',tutar:-yOdeme,renk:'pos'},
+   {et:'NET BORÇ ARTIŞI',tutar:yNet,vurgu:1,renk:yNet>=0?'neg':'pos'}
+  ],notSatiri:
+   (taksitliAdet?'📆 <b>'+taksitliAdet+'</b> taksitli harcama · ':'')
+   +(kdvTop>0.005?'toplam KDV <b>'+fmt(kdvTop)+'</b> · ':'')
+   +'Güncel toplam kart borcu <b>'+fmt(_toplam)+'</b>'
+   +'<br>ℹ Yekûn <b>süzgeçlenen aralığın</b> hareketlerini toplar; üstteki kutular her zaman <b>güncel kesim dönemini</b> anlatır.'});
  var _kbx=document.getElementById('cardEkstreBox'); if(!_kbx)return;
  _kbx.innerHTML=
   `<div class="card"><h2>Kart Ekstresi — ${esc(c.name)} <button class="btn sm gh" data-act="printSection" data-arg="cardEkstreBox~Kredi Kartı Ekstresi — ${_pArg(c.name)}~Güncel borç: ${fmt0(cardDebt(c))}" title="Yalnızca bu ekstreyi yazdırır — sayfanın tamamını değil">🖨 Ekstreyi Yazdır</button></h2>
@@ -2896,14 +2999,40 @@ function cardEkstre(id){
     <div class="kpi"><div class="l">Sonraki Dönemlere Düşecek</div><div class="v">${fmt0(_kt.tutar)}</div><div class="s">${_kt.adet} taksit · bu ekstreye girmedi</div></div>
    </div>
    <div class="mut" style="margin-bottom:10px;font-size:12px">Ekstre borcu nasıl oluştu: devreden <b>${fmt0(_db.devir)}</b> + bu dönem harcaması <b>${fmt0(_db.harcama)}</b> (${_db.kalem.length} kalem) − bu dönem ödemesi <b>${fmt0(_db.odeme)}</b> = <b>${fmt0(_db.net)}</b></div>
+   ${eksCubuk('card',{presets:['ay','gecenAy','g30','yil'],kesim:1,excel:'eksExcelCard'})}
    ${_kt.adet?`<p class="tiny" style="margin:-2px 0 10px">ℹ Taksitli harcamanın <b>tamamı</b> kartın borcuna ve limit kullanımına ilk günden yazılır; <b>aylık ekstreye</b> ise yalnızca o ayın taksidi düşer. Aşağıdaki satırlarda her harcamanın taksit planı yazılı.</p>`:''}
-   ${list.some(t=>t.ekstre)?`<p class="tiny" style="margin:-2px 0 10px;color:var(--warn)">⚠ Bu kartın bazı hareketleri <b>📷 ekstre yüklemesinden</b> geliyor. Banka ekstresi taksitli bir harcamayı <b>o ayın taksit tutarıyla</b> yazar; bu yüzden içe aktarılan satırlar taksit bilgisi taşımaz ve “Toplam Kalan Borç” yalnızca faturalanmış taksitleri içerir — gerçek limit kullanımınız daha yüksek olabilir. Taksitli büyük harcamaları <b>＋ Harcama</b> ile taksit sayısını girerek eklemeniz daha doğru sonuç verir.</p>`:''}
-   ${list.length?'<table><thead><tr><th>Tarih</th><th>İşlem</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+
-    _gos.map(t=>`<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='odeme'?'p':'n'}">${t.type==='odeme'?'Ödeme':'Harcama'}</span> ${esc(t.desc||t.cat||'')}${(+t.taksit||1)>1?' <span class="chip w">'+t.taksit+' taksit</span>':''}${t.vat?' <span class="chip">KDV %'+esc(t.vat)+'</span>':''}${(typeof baglantiCipleri==='function')?('<div class="tiny" style="margin-top:3px">'+baglantiCipleri({cariId:t.cariId,staffTxnId:t.staffTxnId,stokTxnId:t.stokTxnId,assetId:t.assetId,icId:t.icId})+'</div>'):''}${_plan[t.id]?kartTaksitNotu(t,_sr.from,_sr.to,_plan[t.id]):''}</td><td class="num" style="color:${t.type==='odeme'?'var(--pos)':'var(--neg)'}">${t.type==='odeme'?'-':''}${fmt(t.amount)}${_plan[t.id]?'<div class="tiny" style="font-weight:400;color:var(--ink2)">aylık '+fmt(_plan[t.id][0].amount)+'</div>':''}</td>
-    <td class="rowact"><button data-act="del" data-arg="cardT~${t.id}">🗑</button></td></tr>`).join('')+'</tbody></table>'+
-    (list.length>_LIM?'<p class="tiny" style="margin-top:6px">Son '+_LIM+' hareket gösteriliyor ('+list.length+' hareketten). Tamamı için “🖨 Ekstreyi Yazdır” ya da Excel çıktısını kullanın.</p>':'')
-    :'<div class="empty">Bu kartta hareket yok.</div>'}</div>`;
+   ${tumu.some(t=>t.ekstre)?`<p class="tiny" style="margin:-2px 0 10px;color:var(--warn)">⚠ Bu kartın bazı hareketleri <b>📷 ekstre yüklemesinden</b> geliyor. Banka ekstresi taksitli bir harcamayı <b>o ayın taksit tutarıyla</b> yazar; bu yüzden içe aktarılan satırlar taksit bilgisi taşımaz ve “Toplam Kalan Borç” yalnızca faturalanmış taksitleri içerir — gerçek limit kullanımınız daha yüksek olabilir. Taksitli büyük harcamaları <b>＋ Harcama</b> ile taksit sayısını girerek eklemeniz daha doğru sonuç verir.</p>`:''}
+   ${gos.length?'<table><thead><tr><th>Tarih</th><th>İşlem</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody>'+yekun+'</table>'+eksSinirNotu('card',gos.length,_gos.length)
+    :'<div class="empty"><b>Hareket yok</b>'+((d.from||d.to||d.q||d.tur)?'Süzgece uyan hareket yok — <button class="btn sm" data-act="eksTemizle" data-arg="card">✕ Süzgeçleri temizle</button>':'Bu kartta hareket yok.')+'</div>'}</div>`;
  try{document.getElementById('cardEkstreBox').scrollIntoView({behavior:'smooth'});}catch(e){}
+}
+/* v58: kart ekstresinin SÜZGEÇLİ Excel çıktısı */
+function eksExcelCard(){
+ if(!_cardEk.id){toast('Önce bir kart ekstresi açın');return;}
+ const c=S.cards.find(x=>x.id===_cardEk.id);if(!c){toast('Kart bulunamadı');return;}
+ const d=eksD('card');
+ const list=S.cardTxns.filter(t=>t.cardId===_cardEk.id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1)
+  .filter(function(t){return eksCardGecer(t,d);});
+ if(!list.length){toast('Süzgece uyan hareket yok');return;}
+ let h=0,o=0,kv=0;
+ const sat=list.map(function(t){
+  if(t.type==='odeme')o+=sayiOku(t.amount); else if(t.type==='harcama')h+=sayiOku(t.amount);   /* v58b: çizici ile birebir */
+  var v=+t.vat||0; if(t.type==='harcama'&&v>0)kv+=sayiOku(t.amount)*v/(100+v);
+  var n=kartTaksitSayisi(t.taksit);
+  return [t.date,t.type==='odeme'?'Ödeme':'Harcama',t.cat||'',t.desc||'',eksSayi(t.amount),
+    n>1?String(n):'1',n>1?eksSayi(sayiOku(t.amount)/n):'',t.vat||'',t.ekstre?'Ekstre yüklemesi':''];
+ });
+ eksCsvIndir(eksDosyaAdi('kart-ekstre',c.name),
+  ['Tarih','İşlem','Kategori','Açıklama','Tutar','Taksit','Aylık Taksit','KDV %','Kaynak'],sat,
+  /* v58b: yekûn etiketi Açıklama kolonunda, tutar Tutar kolonunda olmalı
+     (başlıklar: Tarih, İşlem, Kategori, Açıklama, Tutar, …) */
+  [['','','','TOPLAM HARCAMA',eksSayi(h)],
+   ['','','','TOPLAM ÖDEME',eksSayi(o)],
+   ['','','','NET BORÇ ARTIŞI',eksSayi(h-o)],
+   ['','','','TOPLAM KDV',eksSayi(kv)],
+   ['','','','GÜNCEL TOPLAM KART BORCU',eksSayi(cardDebt(c))]],
+  [['Kredi Kartı Ekstresi',c.name+(c.bank?' ('+c.bank+')':'')],['Şirket',coName(CO)],
+   ['Aralık / süzgeç',eksAralikMetni('card')],['Hareket sayısı',String(sat.length)]]);
 }
 
 /* ---------- CARİ HESAPLAR (v46: sıralama + arama + liste görünümü + alacak/borç listeleri) ---------- */
@@ -3397,46 +3526,125 @@ function cariInvoiceForm(cariId){
 }
 /* v33: cari ekstre tarih araligi — parametresiz cagri (cariDetail) eski "Tumu" davranisini korur */
 var _cariEk={id:null,from:'',to:''};
-function cariEkFrom(v){if(_cariEk.id)cariEkstre(_cariEk.id,v,_cariEk.to);}
-function cariEkTo(v){if(_cariEk.id)cariEkstre(_cariEk.id,_cariEk.from,v);}
-function cariEkPreset(id,k){if(k==='tum')cariEkstre(id,'','');else{const r=rangePreset(k);cariEkstre(id,r.from,r.to);}}
+function cariEkFrom(v){if(_cariEk.id){eksD('cari').from=v||'';eksKaydet();cariEkstre(_cariEk.id);}}
+function cariEkTo(v){if(_cariEk.id){eksD('cari').to=v||'';eksKaydet();cariEkstre(_cariEk.id);}}
+function cariEkPreset(id,k){var d=eksD('cari');if(k==='tum'){d.from='';d.to='';}else{var r=rangePreset(k);d.from=r.from;d.to=r.to;}eksKaydet();cariEkstre(id);}
 function cariEkstre(id,from,to){
+ /* v58 — EKSTRE GELİŞTİRMESİ. Eskiden alt yekûn YOKTU: aralığın toplam borcu,
+    toplam alacağı, net hareketi, kaç faturalık olduğu ve toplam KDV'si hiçbir
+    yerde toplanmıyordu. Arama, tür süzgeci, ay ay kırılım, Excel de yoktu.
+    Bakiye kolonu DAİMA carinin gerçek yürüyen bakiyesidir. */
  const c=S.cari.find(x=>x.id===id);if(!c)return;
- from=from||'';to=to||'';
+ eksKayitDegisti('cari',id,_cariEk&&_cariEk.id);
+ const d=eksD('cari');
+ if(from!==undefined||to!==undefined){ d.from=from||''; d.to=to||''; }
+ from=d.from;to=d.to;
  _cariEk={id:id,from:from,to:to};
  const all=S.cariTxns.filter(t=>t.cariId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?-1:1);
  let devir=0;const list=[];
  for(const t of all){
-  const d=t.type==='borc'?+sayiOku(t.amount):-sayiOku(t.amount);
-  if(from&&t.date<from){devir+=d;continue;} // aralik oncesi net etki -> donem basi devir
+  const dd=t.type==='borc'?+sayiOku(t.amount):-sayiOku(t.amount);
+  if(from&&t.date<from){devir+=dd;continue;}
   if(to&&t.date>to)continue;
   list.push(t);
  }
  const donemBasi=(+c.opening||0)+devir;
  let run=donemBasi;
- const rows=(from?`<tr style="background:var(--acc-soft)"><td>${dTR(from)}</td><td><b>Dönem başı devir</b> <span class="tiny">açılış ${fmt(c.opening)} + önceki hareketler ${fmt(devir)}</span></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmt(donemBasi)}</b></td><td></td></tr>`:'')
- +list.map(t=>{const d=t.type==='borc'?+sayiOku(t.amount):-sayiOku(t.amount);run+=d;
+ const tam=[];
+ for(const t of list){ const dd=t.type==='borc'?+sayiOku(t.amount):-sayiOku(t.amount); run+=dd; tam.push({t:t,d:dd,bak:run}); }
+ const donemSonu=run;
+ /* --- süzgeçler --- */
+ const bugun=todayISO();
+ const gos=tam.filter(function(x){return eksCariGecer(x.t,d,bugun);});
+ /* --- yekûn: süzgeçten geçen TÜM satırlar --- */
+ const yBorc=gos.filter(x=>x.t.type==='borc').reduce((s2,x)=>s2+sayiOku(x.t.amount),0);
+ const yAlacak=gos.filter(x=>x.t.type==='alacak').reduce((s2,x)=>s2+sayiOku(x.t.amount),0);
+ const yNet=Math.round((yBorc-yAlacak)*100)/100;
+ const fat=gos.filter(x=>x.t.fatura);
+ const fatTop=fat.reduce((s2,x)=>s2+sayiOku(x.t.amount),0);
+ /* KDV dahil tutardan KDV'yi ayır: tutar*oran/(100+oran) */
+ const kdvTop=fat.reduce(function(s2,x){var v=+x.t.vat||0;return s2+(v>0?sayiOku(x.t.amount)*v/(100+v):0);},0);
+ const vadesiGecen=gos.filter(x=>x.t.vade&&!x.t.kapandi&&x.t.vade<bugun&&x.t.type==='borc')
+   .reduce((s2,x)=>s2+sayiOku(x.t.amount),0);
+ const kirpik=(!d.hepsi&&gos.length>EKS_LIMIT);
+ const ciz=kirpik?gos.slice(gos.length-EKS_LIMIT):gos;
+ const satirHtml=function(x){
+  const t=x.t;
   const vatTag=(t.fatura&&t.vat)?` <span class="tiny">(KDV %${esc(t.vat)}, tutarı: ${fmt(+sayiOku(t.amount)*t.vat/(100+ +t.vat))})</span>`:'';
-  const acc=t.nakit&&t.accId?S.accounts.find(x=>x.id===t.accId):null;
-  const card=t.nakit&&t.cardId?S.cards.find(x=>x.id===t.cardId):null;
+  const acc=t.nakit&&t.accId?S.accounts.find(y=>y.id===t.accId):null;
+  const card=t.nakit&&t.cardId?S.cards.find(y=>y.id===t.cardId):null;
   const nakitTag=acc?` <span class="chip p" data-act="accDetail" data-arg="${acc.id}" style="cursor:pointer" title="Hesap detayını aç">${t.nakit==='gelir'?'💰 Nakit tahsilat':'💸 Nakit ödeme'} · ${esc(acc.name)}</span>`:card?` <span class="chip p" data-act="cardDetail" data-arg="${card.id}" style="cursor:pointer" title="Kart detayını aç">💳 Kart ödemesi · ${esc(card.name)}</span>`:(t.nakit?` <button class="btn sm dng" data-act="fixOrphanTxn" data-arg="${t.id}">⚠ Düzelt (hesap seçilmemiş)</button>`:` <span class="chip w">📝 Veresiye</span>`);
-  /* v46: çek, stok, demirbaş, POS ve kart bağlantıları eskiden hiç gösterilmiyordu */
   const _bg2=(typeof baglantiCipleri==='function')?baglantiCipleri({cekId:t.cekId,stokTxnId:t.stokTxnId,assetId:t.assetId,posEId:t.posEId,cardTxnId:t.cardTxnId,icId:t.icId}):'';
-  return `<tr><td>${dTR(t.date)}</td><td>${t.fatura?`<span class="chip g">🧾 ${esc(t.faturaNo||'Fatura')}</span> `:''}${esc(t.desc||'')}${vatTag}${nakitTag} ${_bg2?`<div class="tiny" style="margin-top:3px">${_bg2}</div>`:''} ${t.vade?'<div class="tiny">Vade: '+dTR(t.vade)+(t.kapandi?' <span class="chip p">kapandı ✓</span>':' <button class="btn sm gh" data-act="cariVadeKapat" data-arg="'+t.id+'">✔ Kapat</button>')+'</div>':''}</td>
+  const gecikti=(t.vade&&!t.kapandi&&t.vade<bugun);
+  return `<tr${gecikti?' style="background:rgba(224,86,79,.06)"':''}><td>${dTR(t.date)}</td><td>${t.fatura?`<span class="chip g">🧾 ${esc(t.faturaNo||'Fatura')}</span> `:''}${esc(t.desc||'')}${vatTag}${nakitTag} ${_bg2?`<div class="tiny" style="margin-top:3px">${_bg2}</div>`:''} ${t.vade?'<div class="tiny">Vade: '+dTR(t.vade)+(t.kapandi?' <span class="chip p">kapandı ✓</span>':(gecikti?' <span class="chip n">⏰ gecikti</span>':'')+' <button class="btn sm gh" data-act="cariVadeKapat" data-arg="'+t.id+'">✔ Kapat</button>')+'</div>':''}</td>
   <td class="num amtN">${t.type==='borc'?fmt(t.amount):'<span class="nil">—</span>'}</td><td class="num amtP">${t.type==='alacak'?fmt(t.amount):'<span class="nil">—</span>'}</td>
-  <td class="num" style="font-weight:600">${fmt(run)}</td>
-  <td class="rowact"><button data-act="del" data-arg="cariT~${t.id}">🗑</button></td></tr>`;}).join('');
+  <td class="num" style="font-weight:600">${fmt(x.bak)}</td>
+  <td class="rowact"><button data-act="del" data-arg="cariT~${t.id}">🗑</button></td></tr>`;
+ };
+ let rows=(from?`<tr style="background:var(--acc-soft)"><td>${dTR(from)}</td><td><b>Dönem başı devir</b> <span class="tiny">açılış ${fmt(c.opening)} + önceki hareketler ${fmt(devir)}</span></td><td class="num"></td><td class="num"></td><td class="num"><b>${fmt(donemBasi)}</b></td><td></td></tr>`:'');
+ if(d.ay){
+  rows+=eksAyGrupla(ciz.map(function(x){return {ay:String(x.t.date||'').slice(0,7),html:satirHtml(x),
+    a:x.t.type==='borc'?sayiOku(x.t.amount):0,b:x.t.type==='alacak'?sayiOku(x.t.amount):0};}),
+   {kolon:6,yon:'eski',etiket:['borç','alacak']});
+ }else{
+  rows+=ciz.map(satirHtml).join('');
+ }
+ const yekun=eksYekun({kolon:6,solKolon:2,kalemler:[
+   {et:'YEKÛN — toplam borç',tutar:yBorc,renk:'neg',not:gos.length+' hareket · '+eksAralikMetni('cari')},
+   {et:'YEKÛN — toplam alacak',tutar:yAlacak,renk:'pos'},
+   {et:'NET HAREKET',tutar:yNet,vurgu:1,renk:yNet>=0?'pos':'neg',
+    sag:(from||to)?('Dönem sonu: '+fmt(donemSonu)):('Bakiye: '+fmt(donemSonu))}
+  ],notSatiri:
+   '🧾 <b>'+fat.length+'</b> fatura · faturalı tutar <b>'+fmt(fatTop)+'</b> · toplam KDV <b>'+fmt(kdvTop)+'</b> · KDV hariç <b>'+fmt(fatTop-kdvTop)+'</b>'
+   +' · 💳 <b>'+gos.filter(function(x){return x.t.nakit&&(x.t.accId||x.t.cardId);}).length+'</b> nakit hareketli kayıt'   /* v58b: v57 üst satırındaki sayım buraya taşındı */
+   +(vadesiGecen>0.005?' · <span style="color:var(--neg)">⏰ vadesi geçmiş açık borç <b>'+fmt(vadesiGecen)+'</b></span>':'')
+   +((d.q||d.tur)?'<br>ℹ Bakiye kolonu carinin <b>gerçek</b> yürüyen bakiyesidir; yekûn ise yalnızca süzgeçten geçen '+gos.length+' hareketi toplar.':'')});
  var _cbx=document.getElementById('cariEkstreBox'); if(!_cbx)return;
  _cbx.innerHTML=
-  `<div class="card"><h2>Cari Ekstre — ${esc(c.name)} <button class="btn sm gh" data-act="printSection" data-arg="cariEkstreBox~Cari Ekstre — ${_pArg(c.name)}~${dTR(from)} – ${dTR(to)}" title="Yalnızca bu ekstreyi yazdırır — sayfanın tamamını değil">🖨 Ekstreyi Yazdır</button>${run>0?'<button class="btn sm gh" data-act="aiCollectMail" data-arg="'+id+'">✦ Tahsilat Maili</button>':''}</h2>
-  <div class="filters" style="margin-bottom:8px"><span class="mut" style="align-self:center">Aralık:</span>
-   <input type="date" value="${from}" data-actv="cariEkFrom"><input type="date" value="${to}" data-actv="cariEkTo">
-   <button class="btn sm gh" data-act="cariEkPreset" data-arg="${id}~ay">Bu Ay</button>
-   <button class="btn sm gh" data-act="cariEkPreset" data-arg="${id}~gecenAy">Geçen Ay</button>
-   <button class="btn sm ${(!from&&!to)?'':'gh'}" data-act="cariEkPreset" data-arg="${id}~tum">Tümü</button></div>
-  <div class="mut" style="margin-bottom:8px">Açılış: ${fmt(c.opening)}${(from||to)?' · Dönem başı: <b>'+fmt(donemBasi)+'</b> · Dönem sonu: <b>'+fmt(run)+'</b>':' · Güncel bakiye: <b>'+fmt(run)+'</b>'} ${run>0?'(bize borçlu)':run<0?'(biz borçluyuz)':''} · 🧾 ${list.filter(t=>t.fatura).length} fatura · 💳 ${list.filter(t=>t.nakit&&t.accId).length} nakit hareketli kayıt</div>
-  ${rows?'<table><thead><tr><th>Tarih</th><th>Açıklama</th><th class="num">Borç</th><th class="num">Alacak</th><th class="num">Bakiye</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody></table>':'<div class="empty">'+((from||to)?'Seçili aralıkta hareket yok.':'Hareket yok.')+'</div>'}</div>`;
+  `<div class="card"><h2>Cari Ekstre — ${esc(c.name)} <button class="btn sm gh" data-act="printSection" data-arg="cariEkstreBox~Cari Ekstre — ${_pArg(c.name)}~${dTR(from)} – ${dTR(to)}" title="Yalnızca bu ekstreyi yazdırır — sayfanın tamamını değil">🖨 Ekstreyi Yazdır</button>${donemSonu>0?'<button class="btn sm gh" data-act="aiCollectMail" data-arg="'+id+'">✦ Tahsilat Maili</button>':''}</h2>
+  ${eksCubuk('cari',{presets:['ay','gecenAy','g30','yil'],excel:'eksExcelCari'})}
+  <div class="mut" style="margin-bottom:8px">Açılış: ${fmt(c.opening)}${(from||to)?' · Dönem başı: <b>'+fmt(donemBasi)+'</b> · Dönem sonu: <b>'+fmt(donemSonu)+'</b>':' · Güncel bakiye: <b>'+fmt(donemSonu)+'</b>'} ${donemSonu>0?'(bize borçlu)':donemSonu<0?'(biz borçluyuz)':''} · ${list.length} hareket${(d.q||d.tur)?' · süzgeçte '+gos.length:''}</div>
+  ${(gos.length||from)?'<table><thead><tr><th>Tarih</th><th>Açıklama</th><th class="num">Borç</th><th class="num">Alacak</th><th class="num">Bakiye</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody>'+yekun+'</table>'+eksSinirNotu('cari',gos.length,ciz.length):'<div class="empty"><b>Hareket yok</b>'+((d.q||d.tur)?'Süzgece uyan hareket yok — <button class="btn sm" data-act="eksTemizle" data-arg="cari">✕ Süzgeçleri temizle</button>':((from||to)?'Seçili aralıkta hareket yok.':'Hareket yok.'))+'</div>'}</div>`;
  try{document.getElementById('cariEkstreBox').scrollIntoView({behavior:'smooth'});}catch(e){}
+}
+/* v58: cari ekstresinin SÜZGEÇLİ Excel çıktısı */
+function eksExcelCari(){
+ if(!_cariEk||!_cariEk.id){toast('Önce bir cari ekstresi açın');return;}
+ const c=S.cari.find(x=>x.id===_cariEk.id);if(!c){toast('Cari bulunamadı');return;}
+ const d=eksD('cari'),bugun=todayISO();
+ const all=S.cariTxns.filter(t=>t.cariId===_cariEk.id&&!t.deletedAt).sort((a,b)=>a.date<b.date?-1:1);
+ let devir=0;const list=[];
+ for(const t of all){
+  const dd=t.type==='borc'?+sayiOku(t.amount):-sayiOku(t.amount);
+  if(d.from&&t.date<d.from){devir+=dd;continue;}
+  if(d.to&&t.date>d.to)continue;
+  list.push(t);
+ }
+ let run=sayiOku(c.opening)+devir;   /* v58b */
+ const sat=[];let b=0,a2=0,fn=0,ft=0,kv=0;
+ for(const t of list){
+  const dd=t.type==='borc'?+sayiOku(t.amount):-sayiOku(t.amount);
+  run+=dd;
+  if(!eksCariGecer(t,d,bugun))continue;
+  if(t.type==='borc')b+=sayiOku(t.amount); else a2+=sayiOku(t.amount);
+  if(t.fatura){fn++;ft+=sayiOku(t.amount);var v=+t.vat||0;if(v>0)kv+=sayiOku(t.amount)*v/(100+v);}
+  sat.push([t.date,t.fatura?'Fatura':'',t.faturaNo||'',t.desc||'',
+    t.type==='borc'?eksSayi(t.amount):'',t.type==='alacak'?eksSayi(t.amount):'',
+    eksSayi(run),t.vat||'',t.vade||'',t.kapandi?'Kapandı':(t.vade&&t.vade<bugun?'Gecikti':''),
+    t.nakit?(accNameOf(t.accId)||cardNameOf(t.cardId)||'Nakit'):'Veresiye']);
+ }
+ if(!sat.length){toast('Süzgece uyan hareket yok');return;}
+ eksCsvIndir(eksDosyaAdi('cari-ekstre',c.name),
+  ['Tarih','Fatura','Fatura No','Açıklama','Borç','Alacak','Bakiye','KDV %','Vade','Vade Durumu','Yöntem'],sat,
+  [['','','','TOPLAM BORÇ',eksSayi(b)],
+   ['','','','TOPLAM ALACAK','',eksSayi(a2)],
+   ['','','','NET HAREKET',eksSayi(b-a2)],
+   ['','','','DÖNEM SONU BAKİYE','','',eksSayi(run)],
+   ['','','','FATURA SAYISI',String(fn)],
+   ['','','','FATURALI TUTAR',eksSayi(ft)],
+   ['','','','TOPLAM KDV',eksSayi(kv)],
+   ['','','','KDV HARİÇ',eksSayi(ft-kv)]],
+  [['Cari Ekstre',c.name],['Şirket',coName(CO)],['Aralık / süzgeç',eksAralikMetni('cari')],['Hareket sayısı',String(sat.length)]]);
 }
 
 /* ---------- PERSONEL & MAAŞ ---------- */
@@ -3735,23 +3943,82 @@ function kidemStr(sd){ // v14-D: startDate hiçbir yerde okunmuyordu
  return (y?y+' yıl ':'')+(m?m+' ay ':'')+((!y&&!m)?d+' gün ':'')+'kıdem';
 }
 function staffHist(id){
+ /* v58 — EKSTRE GELİŞTİRMESİ. Personel dökümünde hiç süzgeç ve alt yekûn yoktu;
+    bir personele dönem boyunca ne kadar maaş/avans/prim ödendiği, kesintinin ne
+    kadar olduğu toplanmıyordu. Diğer ekstrelerle aynı çubuk ve yekûn geldi. */
  const st=S.staff.find(x=>x.id===id);if(!st)return;
- const pays=S.staffTxns.filter(t=>t.staffId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
+ eksKayitDegisti('staff',id,_staffEk.id);
+ _staffEk={id:id};
+ const d=eksD('staff');
+ const tumu=S.staffTxns.filter(t=>t.staffId===id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1);
  const lvs=S.leaves.filter(l=>l.staffId===id&&!l.deletedAt).sort((a,b)=>a.start<b.start?1:-1);
  const TT={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
  const LT={yillik:'Yıllık izin',ucretsiz:'Ücretsiz izin',rapor:'Sağlık raporu',mazeret:'Mazeret'};
- var _shx=document.getElementById('staffHistBox'); if(!_shx){go('staff');_shx=document.getElementById('staffHistBox');} if(!_shx)return; // v14: kutu yoksa önce personel ekranına dön
+ const gos=tumu.filter(function(t){return eksStaffGecer(t,d);});
+ const T=function(tur){return gos.filter(t=>t.type===tur).reduce((s2,t)=>s2+sayiOku(t.amount),0);};
+ const yMaas=T('maas'),yAvans=T('avans'),yPrim=T('prim'),yKes=T('kesinti');
+ const yNet=Math.round((yMaas+yAvans+yPrim-yKes)*100)/100;
+ const kirpik=(!d.hepsi&&gos.length>EKS_LIMIT);
+ const ciz=kirpik?gos.slice(0,EKS_LIMIT):gos;
+ const satirHtml=function(t){
+  return `<tr><td>${dTR(t.date)}</td><td><span class="chip ${t.type==='kesinti'?'n':t.type==='avans'?'w':'g'}">${TT[t.type]||t.type}</span> <span class="tiny">${esc(t.desc||'')}</span></td><td class="hidem">${t.period?mTR(t.period):''}</td><td class="num"${t.type==='kesinti'?' style="color:var(--neg)"':''}>${t.type==='kesinti'?'-':''}${fmt(t.amount)}</td>
+   <td class="rowact"><button data-act="del" data-arg="staffT~${t.id}">🗑</button></td></tr>`;
+ };
+ let rows;
+ if(d.ay){
+  /* v58b: bant anahtarı t.date — tarih süzgeci de t.date kullanıyor. Eskiden
+     t.period'e göre gruplanıyordu; şubatta ödenen ocak maaşı seçili aralığın
+     DIŞINDA bir ocak bandı yaratıyordu. Dönem kendi kolonunda duruyor. */
+  rows=eksAyGrupla(ciz.map(function(t){return {ay:String(t.date||'').slice(0,7),html:satirHtml(t),
+    a:t.type!=='kesinti'?sayiOku(t.amount):0,b:t.type==='kesinti'?sayiOku(t.amount):0};}),
+   {kolon:5,solKolon:4,hidem:1,yon:'eski',etiket:['ödeme','kesinti']});
+ }else{
+  rows=ciz.map(satirHtml).join('');
+ }
+ const kalemler=[];
+ if(yMaas)kalemler.push({et:'Toplam maaş',tutar:yMaas});
+ if(yAvans)kalemler.push({et:'Toplam avans',tutar:yAvans});
+ if(yPrim)kalemler.push({et:'Toplam prim',tutar:yPrim});
+ if(yKes)kalemler.push({et:'Toplam kesinti',tutar:-yKes,renk:'neg'});
+ kalemler.push({et:'NET ÖDENEN',tutar:yNet,vurgu:1,renk:yNet>=0?'pos':'neg',not:gos.length+' kayıt · '+eksAralikMetni('staff')});
+ const yekun=eksYekun({kolon:5,solKolon:2,hidem:1,kalemler:kalemler,
+  notSatiri:'Sözleşme maaşı <b>'+fmt(st.salary||0)+'</b>'+(st.startDate?' · işe giriş '+dTR(st.startDate)+' ('+kidemStr(st.startDate)+')':'')});
+ var _shx=document.getElementById('staffHistBox'); if(!_shx){go('staff');_shx=document.getElementById('staffHistBox');} if(!_shx)return;
  _shx.innerHTML=
  `${(st.startDate||st.iban||st.note)?`<div class="card"><h2>Personel Bilgileri</h2><p style="font-size:13px">${st.startDate?'📅 İşe giriş: '+dTR(st.startDate)+' <span class="tiny">('+kidemStr(st.startDate)+')</span>':''}${st.iban?'<br>🏦 IBAN: '+esc(st.iban):''}${st.phone?'<br>☎ '+esc(st.phone):''}</p>${st.note?`<p style="font-size:13px;white-space:pre-wrap;color:var(--ink2)">${esc(st.note)}</p>`:''}</div>`:''}
   <div class="card"><h2>${esc(st.name)} — Ödeme Geçmişi <button class="btn sm gh" data-act="printSection" data-arg="staffHistBox~Personel Dökümü — ${_pArg(st.name)}~Sözleşme maaşı: ${fmt0(st.salary||0)}" title="Yalnızca bu dökümü yazdırır">🖨 Yazdır</button></h2>
-  ${pays.length?'<table><thead><tr><th>Tarih</th><th>Tür</th><th class="hidem">Dönem</th><th class="num">Tutar</th><th></th></tr></thead><tbody>'+
-   pays.map(t=>`<tr><td>${dTR(t.date)}</td><td>${TT[t.type]||t.type} <span class="tiny">${esc(t.desc||'')}</span></td><td class="hidem">${t.period?mTR(t.period):''}</td><td class="num">${fmt(t.amount)}</td>
-   <td class="rowact"><button data-act="del" data-arg="staffT~${t.id}">🗑</button></td></tr>`).join('')+'</tbody></table>':'<div class="empty">Ödeme kaydı yok.</div>'}
+  ${eksCubuk('staff',{presets:['ay','gecenAy','yil'],excel:'eksExcelStaff'})}
+  ${gos.length?'<table><thead><tr><th>Tarih</th><th>Tür</th><th class="hidem">Dönem</th><th class="num">Tutar</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody>'+yekun+'</table>'+eksSinirNotu('staff',gos.length,ciz.length)
+   :'<div class="empty"><b>Kayıt yok</b>'+((d.from||d.to||d.q||d.tur)?'Süzgece uyan ödeme yok — <button class="btn sm" data-act="eksTemizle" data-arg="staff">✕ Süzgeçleri temizle</button>':'Ödeme kaydı yok.')+'</div>'}
   <h2 style="margin-top:16px">İzinler & Raporlar</h2>
   ${lvs.length?'<table><tbody>'+lvs.map(l=>`<tr><td>${dTR(l.start)} → ${dTR(l.end)}</td><td>${LT[l.type]||l.type}</td><td class="tiny">${esc(l.note||'')}</td>
    <td class="rowact"><button data-act="del" data-arg="leave~${l.id}">🗑</button></td></tr>`).join('')+'</tbody></table>':'<div class="empty">İzin kaydı yok.</div>'}
  </div>`;
  try{document.getElementById('staffHistBox').scrollIntoView({behavior:'smooth'});}catch(e){}
+}
+/* v58: personel dökümünün SÜZGEÇLİ Excel çıktısı */
+function eksExcelStaff(){
+ if(!_staffEk.id){toast('Önce bir personel dökümü açın');return;}
+ const st=S.staff.find(x=>x.id===_staffEk.id);if(!st){toast('Personel bulunamadı');return;}
+ const d=eksD('staff'),TT={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
+ const list=S.staffTxns.filter(t=>t.staffId===_staffEk.id&&!t.deletedAt).sort((a,b)=>a.date<b.date?1:-1)
+  .filter(function(t){return eksStaffGecer(t,d);});
+ if(!list.length){toast('Süzgece uyan kayıt yok');return;}
+ const T={maas:0,avans:0,prim:0,kesinti:0};
+ const sat=list.map(function(t){
+  T[t.type]=(T[t.type]||0)+sayiOku(t.amount);
+  return [t.date,TT[t.type]||t.type,t.period||'',t.desc||'',eksSayi(t.amount)];
+ });
+ eksCsvIndir(eksDosyaAdi('personel-dokum',st.name),
+  ['Tarih','Tür','Dönem','Açıklama','Tutar'],sat,
+  [['','','','TOPLAM MAAŞ',eksSayi(T.maas)],
+   ['','','','TOPLAM AVANS',eksSayi(T.avans)],
+   ['','','','TOPLAM PRİM',eksSayi(T.prim)],
+   ['','','','TOPLAM KESİNTİ',eksSayi(-T.kesinti)],
+   ['','','','NET ÖDENEN',eksSayi(T.maas+T.avans+T.prim-T.kesinti)],
+   ['','','','SÖZLEŞME MAAŞI',eksSayi(st.salary||0)]],
+  [['Personel Ödeme Dökümü',st.name],['Şirket',coName(CO)],
+   ['Aralık / süzgeç',eksAralikMetni('staff')],['Kayıt sayısı',String(sat.length)]]);
 }
 
 /* ---------- SABİT & RESMİ ÖDEMELER ---------- */
@@ -14849,4 +15116,412 @@ function kfKurulum(){
  }catch(e){}
  /* meşguliyet bitince bekleyen yenilemeyi uygula */
  try{setInterval(function(){if(_kfBekleyen&&!kfMesgulMu())kfBekleyenUygula();},4000);}catch(e){}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v58 — EKSTRE ARAÇ TAKIMI
+
+   Şikâyet: "ekstrelerde gelir gider bakiyesi altta bazen yazılmıyor, özellikle
+   süzgeç kullanılınca altta yekûnler yok. ekstre özellikleri daha çok
+   geliştirilmeli, tüm ekstreler için daha fonksiyonel özellikler lazım."
+
+   Ölçüm (v57 kodu): HİÇBİR ekstrede alt yekûn satırı yoktu. Üstteki tek satır
+   yalnızca dönem SONU BAKİYESİNİ veriyordu; süzgeçlenen aralığın toplam
+   borcu/alacağı, girişi/çıkışı hiçbir yerde toplanmıyordu. Kart ekstresinde
+   tarih süzgeci de yoktu (hep tüm geçmiş, sessizce son 200 satır).
+
+   Bu modül dört ekstrenin (banka/kasa, cari, kredi kartı, personel) ORTAK
+   süzgeç/yekûn/çıktı altyapısıdır. Dört ekranda ayrı ayrı kod çoğaltmak yerine
+   tek yerden beslenir; böylece "bir ekranda var öbüründe yok" durumu oluşmaz.
+
+   TEMEL KURAL: yekûn her zaman SÜZGEÇTEN GEÇEN TÜM kayıtlardan hesaplanır —
+   ekranda gösterilen (satır sınırıyla kırpılmış) satırlardan değil. Aksi halde
+   "son 200 satır" gösterilen bir ekstrede toplam yanlış çıkar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+var EKS_SURUM='v1';
+var EKS_LIMIT=200;          /* "tümünü göster" kapalıyken çizilecek satır sayısı */
+var EKS_TURLER={            /* her ekstre için geçerli tür süzgeçleri (beyaz liste) */
+ acc  : ['','giris','cikis','virman'],
+ cari : ['','fatura','nakit','veresiye','vadeli','borc','alacak'],
+ card : ['','harcama','odeme','taksitli'],
+ staff: ['','maas','avans','prim','kesinti']
+};
+var EKS_TUR_ETIKET={
+ acc  : [['','Tümü'],['giris','💰 Yalnız giriş'],['cikis','💸 Yalnız çıkış'],['virman','⇄ Yalnız virman']],
+ cari : [['','Tümü'],['fatura','🧾 Yalnız faturalar'],['nakit','💳 Yalnız nakit hareketler'],['veresiye','📝 Yalnız veresiye'],['vadeli','⏰ Vadesi geçmiş & açık'],['borc','Yalnız borç satırları'],['alacak','Yalnız alacak satırları']],
+ card : [['','Tümü'],['harcama','💸 Yalnız harcama'],['odeme','💰 Yalnız ödeme'],['taksitli','📆 Yalnız taksitli harcamalar']],
+ staff: [['','Tümü'],['maas','Maaş'],['avans','Avans'],['prim','Prim'],['kesinti','Kesinti']]
+};
+
+var EKS={};
+var _eksYuklenenKul=null;   /* hafızanın HANGİ kullanıcı için yüklendiği */
+function eksVarsayilan(){return {from:'',to:'',q:'',tur:'',ay:0,hepsi:0};}
+/* v58b KRİTİK DÜZELTME — SÜZGEÇ HAFIZASI HİÇ ÇALIŞMIYORDU.
+   eksYukle() dosya yüklenirken (parse anında) bir kez çağrılıyordu; o anda SESSION
+   henüz null olduğu için anahtar 'anon' çıkıyor ve okunan yer ile YAZILAN yer
+   (giriş sonrası SESSION.id) asla aynı olmuyordu. Kullanıcı aralığı seçip sayfayı
+   yenilediğinde süzgeç geri gelmiyor, üstüne her kullanıcı için bir yetim
+   localStorage kaydı birikiyordu.
+   Artık yükleme TEMBELdir: ilk erişimde yapılır ve kullanıcı değişince (giriş /
+   çıkış / başka kullanıcı) kendiliğinden yenilenir. Bu aynı zamanda A kullanıcısının
+   arama metninin B kullanıcısına sızmasını da engeller. */
+function eksHazirla(){
+ var u=(typeof SESSION!=='undefined'&&SESSION&&SESSION.id)?SESSION.id:'anon';
+ if(_eksYuklenenKul===u)return;
+ _eksYuklenenKul=u;
+ eksYukle();
+}
+function eksD(k){ eksHazirla(); return EKS[k]||(EKS[k]=eksVarsayilan()); }
+/* v58b: BAŞKA bir hesaba/cariye/karta/personele geçildiğinde ne KORUNUR, ne SIFIRLANIR?
+     korunur   → tarih aralığı ve ay kırılımı. Kullanıcı süzgeç hafızasını zaten
+                 "çalıştığım dönem" için istedi; her kayıtta yeniden seçmek zahmet.
+     sıfırlanır → ARAMA METNİ, TÜR SÜZGECİ ve satır sınırı. İkisi de bir kaydı
+                 TAMAMEN boş gösterebilir: "yalnız faturalar" açıkken faturasız bir
+                 cariye tıklayan kullanıcı, hiç süzgeçlemediği bir hesapta boş ekran
+                 görüyordu. Tarih aralığı boş sonuç verirse en azından sebebi
+                 süzgeç çubuğunda gözle görünür; tür ve arama öyle değil.
+   Satır sınırı da her kayıtta başa döner (başarım kapısı, tercih değil). */
+function eksKayitDegisti(k,id,oncekiId){
+ if(!EKS_TURLER[k])return;
+ if(oncekiId&&String(oncekiId)===String(id))return;
+ var d=eksD(k);
+ d.q='';d.tur='';d.hepsi=0;
+}
+
+/* ---------- süzgeç hafızası (kullanıcıya özel, tarayıcıda) ---------- */
+/* gunGecerli YALNIZCA biçime bakar: '2026-99-99' ondan geçer. Hafızadan ya da
+   elle gelen böyle bir tarih her satırı eleyip ekstreyi sessizce BOŞ gösterirdi.
+   Burada gerçek takvim kontrolü yapılır (31 Şubat da reddedilir). */
+function eksTarihGecerli(d){
+ d=String(d||'').slice(0,10);
+ if(typeof gunGecerli==='function'&&!gunGecerli(d))return false;
+ var p=d.split('-'),y=+p[0],m=+p[1],g=+p[2];
+ if(!(y>=1900&&y<=2200))return false;
+ if(!(m>=1&&m<=12))return false;
+ if(!(g>=1&&g<=31))return false;
+ var dt=new Date(Date.UTC(y,m-1,g));
+ return dt.getUTCFullYear()===y&&dt.getUTCMonth()===(m-1)&&dt.getUTCDate()===g;
+}
+function eksAnah(){
+ var u=(typeof SESSION!=='undefined'&&SESSION&&SESSION.id)?SESSION.id:'anon';
+ return 'lole.ekstreSuzgec.'+EKS_SURUM+'.'+u;
+}
+function eksKaydet(){
+ /* v54'teki kfYaz kota taşmasında bir kez uyarıp sessizce devam eder */
+ try{ if(typeof kfYaz==='function')kfYaz(eksAnah(),EKS); }catch(e){}
+}
+function eksYukle(){
+ EKS={};
+ var d=null;
+ try{ if(typeof kfOku==='function')d=kfOku(eksAnah()); }catch(e){ d=null; }
+ var turler=['acc','cari','card','staff'];
+ for(var i=0;i<turler.length;i++){
+  var k=turler[i],v=eksVarsayilan(),g=(d&&d[k])?d[k]:null;
+  if(g){
+   /* Hafızadan gelen değer DOĞRULANIR. Bozuk bir tarih tüm ekstreyi boş
+      gösterebilir, tanımsız bir tür süzgeci de her satırı eleyebilirdi. */
+   if(g.from&&eksTarihGecerli(g.from))v.from=String(g.from).slice(0,10);
+   if(g.to&&eksTarihGecerli(g.to))v.to=String(g.to).slice(0,10);
+   if(v.from&&v.to&&v.from>v.to){v.from='';v.to='';}
+   if(typeof g.q==='string')v.q=g.q.slice(0,80);
+   if(g.tur&&EKS_TURLER[k].indexOf(String(g.tur))>-1)v.tur=String(g.tur);
+   v.ay=g.ay?1:0;
+   v.hepsi=g.hepsi?1:0;
+  }
+  /* "Tümünü göster" bir TERCİH DEĞİL, başarım kapısının geçici olarak açılmasıdır;
+     hafızadan geri gelmesi 20.000 satırlık bir ekstreyi her açılışta çizmek olurdu. */
+  v.hepsi=0;
+  EKS[k]=v;
+ }
+ return EKS;
+}
+
+/* ---------- hangi ekstre açık: yeniden çizim için kimlikler ---------- */
+var _cardEk={id:null};
+var _staffEk={id:null};
+function eksCiz(k){
+ try{
+  if(k==='acc'){ if(_accEk&&_accEk.id)accEkstre(_accEk.id,eksD('acc').from,eksD('acc').to); return; }
+  if(k==='cari'){ if(_cariEk&&_cariEk.id)cariEkstre(_cariEk.id,eksD('cari').from,eksD('cari').to); return; }
+  if(k==='card'){ if(_cardEk.id)cardEkstre(_cardEk.id); return; }
+  if(k==='staff'){ if(_staffEk.id)staffHist(_staffEk.id); return; }
+ }catch(e){ try{toast('Ekstre çizilemedi: '+(e&&e.message||'bilinmeyen hata'));}catch(e2){} }
+}
+
+/* ---------- süzgeç olayları (data-act / data-actv) ---------- */
+/* data-actv ikinci argüman olarak ELEMANI verir; tür ve alan oradan okunur. */
+function eksTarih(v,el){
+ if(!el)return;
+ var k=el.getAttribute('data-k'),alan=el.getAttribute('data-alan');
+ if(!k||!EKS_TURLER[k])return;
+ var d=eksD(k);
+ v=String(v||'').slice(0,10);
+ if(v&&!eksTarihGecerli(v)){toast('Geçersiz tarih');return;}
+ d[alan==='to'?'to':'from']=v;
+ if(d.from&&d.to&&d.from>d.to){
+  toast('⚠ Başlangıç bitişten sonra — tarihler yer değiştirildi');
+  var t=d.from;d.from=d.to;d.to=t;
+ }
+ eksKaydet();eksCiz(k);
+}
+function eksPreset(k,p){
+ if(!EKS_TURLER[k])return;
+ var d=eksD(k);
+ if(p==='tum'){d.from='';d.to='';}
+ else if(p==='kesim'){
+  var c=(k==='card'&&_cardEk.id)?S.cards.find(function(x){return x.id===_cardEk.id;}):null;
+  if(!c){toast('Kart bulunamadı');return;}
+  var r=cardStatementRange(c);d.from=r.from;d.to=r.to;
+ }else{ var r2=rangePreset(p); d.from=r2.from; d.to=r2.to; }
+ eksKaydet();eksCiz(k);
+}
+function eksAra(v,el){
+ if(!el)return;
+ var k=el.getAttribute('data-k'); if(!EKS_TURLER[k])return;
+ eksD(k).q=String(v||'').slice(0,80);
+ eksKaydet();eksCiz(k);
+}
+function eksTur(v,el){
+ if(!el)return;
+ var k=el.getAttribute('data-k'); if(!EKS_TURLER[k])return;
+ v=String(v||'');
+ if(EKS_TURLER[k].indexOf(v)===-1)v='';
+ eksD(k).tur=v;
+ eksKaydet();eksCiz(k);
+}
+function eksAyTgl(k){ if(!EKS_TURLER[k])return; var d=eksD(k); d.ay=d.ay?0:1; eksKaydet();eksCiz(k); }
+function eksHepsi(k){ if(!EKS_TURLER[k])return; eksD(k).hepsi=1; eksKaydet();eksCiz(k); }
+function eksSinirKoy(k){ if(!EKS_TURLER[k])return; eksD(k).hepsi=0; eksKaydet();eksCiz(k); }
+function eksTemizle(k){ if(!EKS_TURLER[k])return; EKS[k]=eksVarsayilan(); eksKaydet();eksCiz(k); }
+
+/* ---------- süzgeç çubuğu ---------- */
+/* opt: {presets:[...], kesim:1, excel:'eksExcelAcc'} */
+function eksCubuk(k,opt){
+ opt=opt||{};
+ var d=eksD(k);
+ var pres=opt.presets||['ay','gecenAy','g30','yil'];
+ var PAD={ay:'Bu Ay',gecenAy:'Geçen Ay',g7:'Son 7 Gün',g30:'Son 30 Gün',yil:'Bu Yıl'};
+ var dugmeler='';
+ if(opt.kesim)dugmeler+='<button class="btn sm gh" data-act="eksPreset" data-arg="'+k+'~kesim" title="Kartın güncel hesap kesim dönemi">📆 Kesim Dönemi</button>';
+ for(var i=0;i<pres.length;i++)dugmeler+='<button class="btn sm gh" data-act="eksPreset" data-arg="'+k+'~'+pres[i]+'">'+esc(PAD[pres[i]]||pres[i])+'</button>';
+ dugmeler+='<button class="btn sm '+((!d.from&&!d.to)?'':'gh')+'" data-act="eksPreset" data-arg="'+k+'~tum">Tümü</button>';
+ var turOpts=EKS_TUR_ETIKET[k]||[['','Tümü']];
+ var turSel='<select data-actv="eksTur" data-k="'+k+'" title="Tür süzgeci">'+
+  turOpts.map(function(o){return '<option value="'+esc(o[0])+'"'+(String(d.tur)===String(o[0])?' selected':'')+'>'+esc(o[1])+'</option>';}).join('')+'</select>';
+ /* v58b: hepsi/ay de birer süzgeç durumudur — eskiden bu ikisi açıkken
+    "✕ Süzgeçleri temizle" düğmesi basılmıyordu ve "Tümünü göster"i geri almanın
+    hiçbir yolu kalmıyordu (satır sınırı notu da kalktığı için). */
+ var suzgecVar=!!(d.from||d.to||d.q||d.tur||d.ay||d.hepsi);
+ return '<div class="filters eksFiltre" style="margin-bottom:8px">'+
+  '<span class="mut" style="align-self:center">Aralık:</span>'+
+  '<input type="date" value="'+esc(d.from)+'" data-actv="eksTarih" data-k="'+k+'" data-alan="from" title="Başlangıç">'+
+  '<input type="date" value="'+esc(d.to)+'" data-actv="eksTarih" data-k="'+k+'" data-alan="to" title="Bitiş">'+
+  dugmeler+
+  '<input type="text" value="'+esc(d.q||'')+'" placeholder="🔍 Ara: açıklama, belge, tutar..." data-actv="eksAra" data-k="'+k+'" style="min-width:170px">'+
+  turSel+
+  '<button class="btn sm '+(d.ay?'':'gh')+'" data-act="eksAyTgl" data-arg="'+k+'" title="Her ayın sonuna o ayın ara toplamını ekle">📅 Ay ay'+(d.ay?' ✓':'')+'</button>'+
+  (d.hepsi?'<button class="btn sm gh" data-act="eksSinirKoy" data-arg="'+k+'" title="Başarım için satır sınırını geri koy">↩ İlk '+EKS_LIMIT+' satır</button>':'')+
+  (opt.excel?'<button class="btn sm gh" data-act="'+opt.excel+'" title="Ekranda süzgeçlenen satırları yekûnuyla birlikte Excel/CSV olarak indirir">⬇ Excel</button>':'')+
+  (suzgecVar?'<button class="btn sm gh" data-act="eksTemizle" data-arg="'+k+'" title="Tüm süzgeçleri kaldır">✕ Süzgeçleri temizle</button>':'')+
+  '</div>';
+}
+
+/* ---------- arama (Türkçe büyük/küçük harf güvenli) ---------- */
+/* UYARI: JS'in /i bayrağı Türkçe İ/I çiftini eşlemez; ekstre açıklamaları ve
+   banka ekstresinden gelen satırlar BÜYÜK HARF olur. Bu yüzden arama her iki
+   tarafı da trNorm'dan geçirir — v53'te EKSTRE_IPUCU kalıplarını öldüren
+   hatanın aynısı buraya da sızmasın. */
+function eksEsle(q,parcalar){
+ if(!q)return true;
+ var n=(typeof trNorm==='function')?trNorm(q):String(q).toLowerCase();
+ if(!n)return true;
+ var h='';
+ for(var i=0;i<parcalar.length;i++){
+  var p=parcalar[i];
+  if(p===null||p===undefined||p==='')continue;
+  h+=' '+String(p);
+ }
+ /* v58b KRİTİK DÜZELTME — TUTARLA ARAMA ÇALIŞMIYORDU.
+    Normalleştirme yalnızca SAMANLIĞA uygulanıyordu, ARANAN METNE değil. Ekranda
+    "1.500,75 ₺" yazan bir satır, kullanıcı ekrandan kopyaladığı "1.500,75" ile
+    bulunamıyor; yalnızca hiçbir yerde görünmeyen ham "1500.75" biçimi eşleşiyordu.
+    Artık her iki taraf da hem kendi hâliyle hem sayısallaştırılmış hâliyle denenir. */
+ var sayisal=function(x){return String(x).replace(/\./g,'').replace(/,/g,'.');};
+ h+=' '+sayisal(h);
+ var hn=(typeof trNorm==='function')?trNorm(h):h.toLowerCase();
+ if(hn.indexOf(n)>-1)return true;
+ var n2=(typeof trNorm==='function')?trNorm(sayisal(q)):sayisal(q).toLowerCase();
+ if(n2&&n2!==n&&hn.indexOf(n2)>-1)return true;
+ /* "1.500,75" → "1500.75" dönüşümü yetmezse boşluk/ayırıcıdan arınmış hâli de dene */
+ var n3=n.replace(/[.,\s]/g,'');
+ if(n3&&/^\d+$/.test(n3)&&hn.replace(/[.,\s]/g,'').indexOf(n3)>-1)return true;
+ return false;
+}
+
+/* ═══ TEK SÜZGEÇ TANIMI ═══
+   v58b KRİTİK DÜZELTME — EKRAN İLE EXCEL ÇIKTISI AYRI TOPLAM VERİYORDU.
+   Süzgeç koşulları hem çizici hem dışa aktarıcıda ayrı ayrı yazılmıştı ve arama
+   samanlıkları birbirinden kaymıştı: ekranda hesap/kart adı ve taksit metni de
+   aranıyor, Excel'de aranmıyordu. Kullanıcı "Ziraat" yazıp 50.000'lik satırı
+   ekranda görüyor, indirdiği dosyada aynı süzgeç yazılı olduğu hâlde o satır ve
+   toplam bulunmuyordu. Artık ikisi de AŞAĞIDAKİ tek tanımı kullanır.
+   (Evin kuralı: exportTxCsv da aynı nedenle filteredTxns'i paylaşır.) */
+function eksAccGecer(t,delta,d){
+ if(d.tur==='giris'&&!(delta>0))return false;
+ if(d.tur==='cikis'&&!(delta<0))return false;
+ if(d.tur==='virman'&&t.type!=='virman')return false;
+ if(d.q&&!eksEsle(d.q,[t.desc,t.cat,t.doc,t.amount,dTR(t.date),accNameOf(t.accId2)]))return false;
+ return true;
+}
+function eksCariGecer(t,d,bugun){
+ bugun=bugun||todayISO();
+ if(d.tur==='fatura'&&!t.fatura)return false;
+ if(d.tur==='nakit'&&!(t.nakit&&(t.accId||t.cardId)))return false;
+ if(d.tur==='veresiye'&&t.nakit)return false;
+ if(d.tur==='vadeli'&&!(t.vade&&!t.kapandi&&t.vade<bugun))return false;
+ if(d.tur==='borc'&&t.type!=='borc')return false;
+ if(d.tur==='alacak'&&t.type!=='alacak')return false;
+ if(d.q&&!eksEsle(d.q,[t.desc,t.faturaNo,t.amount,dTR(t.date),t.cat,accNameOf(t.accId),cardNameOf(t.cardId)]))return false;
+ return true;
+}
+function eksCardGecer(t,d){
+ if(!gunGecerli(t.date)){ if(d.from||d.to)return false; }
+ else{ if(d.from&&t.date<d.from)return false; if(d.to&&t.date>d.to)return false; }
+ if(d.tur==='harcama'&&t.type!=='harcama')return false;
+ if(d.tur==='odeme'&&t.type!=='odeme')return false;
+ if(d.tur==='taksitli'&&!(t.type==='harcama'&&kartTaksitSayisi(t.taksit)>1))return false;
+ if(d.q&&!eksEsle(d.q,[t.desc,t.cat,t.amount,dTR(t.date),t.taksit?(t.taksit+' taksit'):'']))return false;
+ return true;
+}
+var EKS_STAFF_TUR={maas:'Maaş',avans:'Avans',prim:'Prim',kesinti:'Kesinti'};
+function eksStaffGecer(t,d){
+ if(!gunGecerli(t.date)){ if(d.from||d.to)return false; }
+ else{ if(d.from&&t.date<d.from)return false; if(d.to&&t.date>d.to)return false; }
+ if(d.tur&&t.type!==d.tur)return false;
+ if(d.q&&!eksEsle(d.q,[t.desc,t.amount,dTR(t.date),t.period?mTR(t.period):'',EKS_STAFF_TUR[t.type]]))return false;
+ return true;
+}
+
+/* ---------- ay ay kırılım ---------- */
+/* satirlar: [{ay:'2026-03', html:'<tr>…', a:+giriş, b:+çıkış}]
+   yon: 'yeni' (en yeni üstte) | 'eski' (en eski üstte)
+   kolon: tabloda kaç kolon var (başlık satırı colspan için)
+   etiket: [girişBaşlığı, çıkışBaşlığı] */
+function eksAyGrupla(satirlar,opt){
+ opt=opt||{};
+ var kolon=opt.kolon||4, yon=opt.yon||'yeni', et=opt.etiket||['Giriş','Çıkış'];
+ var hidem=+opt.hidem||0, solK=opt.solKolon||(kolon-hidem);
+ var sira=[],top={};
+ for(var i=0;i<satirlar.length;i++){
+  var s=satirlar[i],ay=s.ay||'—';
+  if(!top[ay]){top[ay]={a:0,b:0,n:0,html:[]};sira.push(ay);}
+  top[ay].a+=(+s.a||0);top[ay].b+=(+s.b||0);top[ay].n++;
+  top[ay].html.push(s.html);
+ }
+ if(yon==='yeni')sira.reverse();
+ var out='';
+ for(var j=0;j<sira.length;j++){
+  var ay2=sira[j],g=top[ay2];
+  var ayAd=(ay2!=='—'&&typeof mTR==='function')?mTR(ay2):'Tarihsiz';
+  /* v58b: ara toplamlar fmt (kuruşlu) ile yazılır — fmt0 yuvarladığı için
+     bantların toplamı alt yekûnla kuruş kuruş tutmuyordu. */
+  out+='<tr class="eksAyBas"><td colspan="'+solK+'">'+
+    '<b>'+esc(ayAd)+'</b> <span class="tiny">'+g.n+' hareket · '+esc(et[0])+' '+fmt(g.a)+' · '+esc(et[1])+' '+fmt(g.b)+' · net '+fmt(g.a-g.b)+'</span></td>'+
+    (hidem>0?'<td class="hidem"'+(hidem>1?' colspan="'+hidem+'"':'')+'></td>':'')+'</tr>';
+  var ic=(yon==='yeni')?g.html.slice().reverse():g.html;
+  out+=ic.join('');
+ }
+ return out;
+}
+
+/* ---------- yekûn satırı ---------- */
+/* kalemler: [{et:'Toplam giriş', tutar:123, renk:'pos'|'neg'|'', kalin:1}] */
+function eksYekun(opt){
+ opt=opt||{};
+ var kolon=opt.kolon||4, sol=opt.solKolon||2;
+ var bos=kolon-sol-1;
+ /* v58b: hidem = mobilde gizlenen kolon sayısı. Personel tablosunda "Dönem"
+    kolonu @media(max-width:900px) altında gizlenir; tfoot hâlâ 5 kolon saydığı
+    için yekûn tutarı telefonda BİR KOLON SAĞA (çöp kutusu kolonuna) kayıyordu.
+    Gizlenen kolon artık tfoot'ta da ayrı bir .hidem hücresiyle temsil edilir. */
+ var hidem=+opt.hidem||0;
+ bos=kolon-sol-1-hidem;
+ var out='<tfoot class="eksYekun">';
+ var K=opt.kalemler||[];
+ for(var i=0;i<K.length;i++){
+  var x=K[i];
+  var renk=x.renk==='pos'?'var(--pos)':x.renk==='neg'?'var(--neg)':'';
+  out+='<tr'+(x.vurgu?' class="eksNet"':'')+'>'+
+   '<td colspan="'+sol+'">'+(x.vurgu?'<b>':'')+esc(x.et)+(x.vurgu?'</b>':'')+
+     (x.not?' <span class="tiny">'+esc(x.not)+'</span>':'')+'</td>'+
+   (hidem>0?'<td class="hidem"'+(hidem>1?' colspan="'+hidem+'"':'')+'></td>':'')+
+   '<td class="num"'+(renk?' style="color:'+renk+'"':'')+'><b>'+(x.metin!==undefined?esc(x.metin):fmt(x.tutar))+'</b></td>'+
+   (bos>0?'<td colspan="'+bos+'" class="num">'+(x.sag!==undefined?'<b>'+esc(x.sag)+'</b>':'')+'</td>':'')+
+   '</tr>';
+ }
+ if(opt.notSatiri)out+='<tr><td colspan="'+kolon+'" class="tiny" style="color:var(--ink2)">'+opt.notSatiri+'</td></tr>';
+ return out+'</tfoot>';
+}
+
+/* ---------- süzgeç açıklaması (yekûnun neyi topladığı) ---------- */
+function eksAralikMetni(k){
+ var d=eksD(k),p=[];
+ if(d.from||d.to)p.push((d.from?dTR(d.from):'baştan')+' – '+(d.to?dTR(d.to):'bugüne'));
+ else p.push('tüm zamanlar');
+ if(d.tur){
+  var L=EKS_TUR_ETIKET[k]||[];
+  for(var i=0;i<L.length;i++)if(L[i][0]===d.tur)p.push(String(L[i][1]).replace(/^[^\w\sÇĞİÖŞÜçğıöşü]+\s*/,''));
+ }
+ if(d.q)p.push('arama: "'+d.q+'"');
+ return p.join(' · ');
+}
+
+/* ---------- satır sınırı uyarısı ---------- */
+function eksSinirNotu(k,toplam,gosterilen){
+ if(toplam<=gosterilen)return '';
+ var d=eksD(k);
+ return '<p class="tiny" style="margin-top:6px;padding:6px 8px;background:var(--acc-soft);border-radius:8px">'+
+  'Başarım için <b>'+gosterilen+'</b> hareket çiziliyor (toplam '+toplam+'). '+
+  '<b>Alttaki yekûn '+toplam+' hareketin tamamını sayar.</b>'+
+  /* v58b: ay bantları ve devir satırı YALNIZ çizilen satırları kapsar; yekûn
+     tamamını. İkisinin tutmaması kullanıcıyı şaşırtmasın diye söylenir. */
+  (d.ay?' Ay bantları ise yalnız çizilen satırları toplar — tam kırılım için “Tümünü göster”.':'')+
+  ' <button class="btn sm" data-act="eksHepsi" data-arg="'+k+'">Tümünü göster</button></p>';
+}
+
+/* ---------- Excel / CSV çıktısı ---------- */
+function eksCsvIndir(dosya,basliklar,satirlar,yekunSatirlari,ustBilgi){
+ try{
+  /* v58b: Excel bir hücreyi = + - @ ile başlıyorsa FORMÜL sayıp çalıştırır.
+     Açıklamalar banka ekstresi okumasından (OCR / xlsx) da gelebildiği için
+     dışa aktarılan her hücrenin başına güvenlik tırnağı konur. */
+  var q=function(v){
+   v=String(v==null?'':v);
+   if(/^[=+\-@\t\r]/.test(v))v="'"+v;
+   return '"'+v.replace(/"/g,'""')+'"';
+  };
+  var L=[];
+  if(ustBilgi)for(var u=0;u<ustBilgi.length;u++)L.push(ustBilgi[u].map(q).join(';'));
+  if(ustBilgi)L.push('');
+  L.push(basliklar.map(q).join(';'));
+  for(var i=0;i<satirlar.length;i++)L.push(satirlar[i].map(q).join(';'));
+  if(yekunSatirlari&&yekunSatirlari.length){
+   L.push('');
+   for(var j=0;j<yekunSatirlari.length;j++)L.push(yekunSatirlari[j].map(q).join(';'));
+  }
+  var blob=new Blob(['﻿'+L.join('\r\n')],{type:'text/csv;charset=utf-8'});
+  var a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=dosya;
+  document.body.appendChild(a);a.click();a.remove();
+  try{logAudit('Ekstre dışa aktarım',dosya+' · '+satirlar.length+' satır');}catch(e){}
+  toast('⬇ İndirildi ('+satirlar.length+' satır) — Excel ile açabilirsiniz');
+ }catch(e){ toast('İndirilemedi: '+(e&&e.message||'bilinmeyen hata')); }
+}
+/* Türkçe Excel ondalık ayırıcı virgüldür */
+function eksSayi(n){ return String(Math.round((+sayiOku(n)||0)*100)/100).replace('.',','); }
+function eksDosyaAdi(kok,ad){
+ var t=String(ad||'').replace(/[^A-Za-z0-9ÇĞİÖŞÜçğıöşü ]+/g,'').replace(/\s+/g,'-').slice(0,40);
+ return 'lole-'+kok+(t?'-'+t:'')+'-'+todayISO()+'.csv';
 }
