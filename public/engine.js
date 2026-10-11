@@ -11659,9 +11659,10 @@ function ekstreTablodanSatirlar(rows,esle,tur){
   /* v49 DENETİM: tahmin edilmiş sütunlardan gelen satır ASLA otomatik işaretli gelmez */
   if(esle.tahmin)uyari.push('Sütunlar tahmin edildi — tutar ve yönü doğrulayın');
 
+  var _kb=ekstreKatBelirle(ac,yon,tur);
   out.push({
    sec:tutar>0&&!!tarih&&!uyari.length, tarih:tarih||'', aciklama:ac,
-   tutar:tutar, yon:yon, kat:ekstreKategori(ac,yon),
+   tutar:tutar, yon:yon, kat:_kb.kat, katKaynak:_kb.kaynak, taksit:1,
    ham:(row.join(' | ')||'').slice(0,200), uyari:uyari, satirNo:r+1
   });
  }
@@ -12042,18 +12043,58 @@ function ekstrePartiMukerrer(){
    Artık kalıplar `trNorm` çıktısına (küçük harf, Türkçe harfler sadeleşmiş) uygulanır,
    her anahtar kelime sınırına çapalıdır ve kısa/çok yönlü kelimeler (su, fast, metro,
    kdv, sok) yalnız ait oldukları terimle birlikte aranır. */
-var EKSTRE_IPUCU=[
- [/\b(market|migros|bim|a101|carrefour|sebze|meyve|kasap|et|un|gida|bakliyat|toptanci|manav|balik|tavuk)\b|\bsok market|\bmetro market|\bmetro gros|\bhal esnaf|\bhal kabzimal|\bsu urunleri/,'Hammadde & Malzeme'],
- [/\b(maas|personel|bordro|sgk ?prim|ucret ?bordro|kidem|ihbar)\b|\bbes odeme|\bbes katki|\bpersonel avans|\bmaas avans/,'Personel'],
- [/\b(kira|kiralama)\b/,'Kira'],
- [/\b(elektrik|dogalgaz|telefon|internet|turk ?telekom|vodafone|turkcell|fatura|abonelik|aydem|bedas|igdas|iski|aski|asat)\b|\bsu fatura|\bsu abone/,'Fatura & Abonelik'],
- [/\b(vergi|sgk|maliye|gib|beyanname|damga|muhtasar|stopaj)\b|\bkdv beyan|\bkdv tahakkuk|\bkdv odeme/,'Vergi & SGK'],
- [/\b(komisyon|havale|eft|masraf|isletim|bsmv|hesap ?ucret|kart ?ucret)\b|\bfast odeme|\bfast transfer/,'Banka & Komisyon'],
- [/\b(akaryakit|benzin|motorin|petrol|opet|shell|bp|lukoil)\b/,'Diğer Gider'],
- [/\b(temizlik|hijyen|deterjan)\b/,'Hammadde & Malzeme'],
- [/\b(bakim|onarim|tamir|servis)\b|\byedek parca/,'Bakım & Onarım'],
- [/\b(reklam|ilan|google|meta|instagram|yemeksepeti|getir|trendyol)\b|\bsosyal medya/,'Pazarlama']
+/* ═══════════════════════════════════════════════════════════════════════════
+   v59 KRİTİK DÜZELTME — KATEGORİ İPUÇLARI TÜRKÇE EKLERDE ÇALIŞMIYORDU
+
+   Kalıplar `\b(kira|komisyon|vergi|bakim|reklam)\b` biçimindeydi. Sondaki kelime
+   sınırı, kökten SONRA bir ek geldiğinde eşleşmeyi bozuyor — Türkçe eklemeli bir dil
+   olduğu için ekstre açıklamalarının çoğu ek alır:
+
+     KİRA ÖDEMESİ      ✅ eşleşiyordu       DÜKKAN KİRASI     ❌ eşleşmiyordu
+     KOMİSYON          ✅                   BANKA KOMİSYONU   ❌
+     VERGİ             ✅                   KDV VERGİSİ       ❌
+     BAKIM             ✅                   ARAÇ BAKIMI       ❌
+
+   Ölçüm: gerçekçi 40 ekstre açıklamasının 25'i "Diğer Gider"e düşüyordu. Kullanıcının
+   "ekstre yükleyince her şey Diğer Gider/Gelir oluyor" şikâyetinin ana sebebi buydu.
+
+   Çözüm: kalıplar artık KÖK listesinden üretilir ve kökün ardına Türkçe ek gelmesine
+   izin verilir. Ek listesi KAPALI bir kümedir — `kira`+`z` ("KİRAZ", bir gıda kalemi)
+   gibi yanlış eşleşmeler bu sayede oluşmaz (test41 bunu ayrıca ölçer).
+   trNorm zaten ı→i, ş→s, ğ→g, ü→u, ö→o, ç→c sadeleştirmesi yaptığı için ek listesi
+   yalnızca sadeleşmiş biçimleri içerir.
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* uzun olan önce — alternasyonda ilk eşleşen kazanır */
+var EK_TR='(?:lar|ler)?(?:nin|nun|yla|yle|miz|niz|dan|den|tan|ten|si|su|yi|yu|ni|nu|in|un|da|de|ta|te|ya|ye|la|le|im|um|i|u|a|e|m)?';
+function ekstreKokKalip(kokler){
+ /* kökler zaten trNorm'lanmış (sadeleşmiş, küçük harf) verilir */
+ return new RegExp('\\b(?:'+kokler.join('|')+')'+EK_TR+'\\b');
+}
+var EKSTRE_IPUCU_KOK=[
+ [['market','migros','bim','a101','carrefour','sok market','metro market','metro gros','grosmarket','gros market','sebze','meyve','kasap','et','un','unlu mamul','gida','bakliyat','toptanci','manav','balik','tavuk','hal esnaf','hal kabzimal','su urunleri','peynir','zeytin','bakkal','firin','degirmen','temizli(?:k|g)','hijyen','deterjan','ambalaj','pecete','strec','poset'],'Hammadde & Malzeme'],
+ [['maas','personel','bordro','sgk prim','ucret bordro','kidem','ihbar','bes odeme','bes katki','personel avans','maas avans','yemek karti'],'Personel'],
+ /* 'kiraci' bilinçli olarak YOK: kiracıdan gelen para bizim için GELİRDİR,
+    gider ipucu olarak kullanılması "KİRACI DEPOZİTO" gibi satırları Kira
+    giderine yazardı. */
+ [['kira','kiralama','isyeri kira','dukkan kira'],'Kira'],
+ [['elektrik','dogalgaz','telefon','internet','turk telekom','telekom','vodafone','turkcell','fatura','abonelik','aydem','bedas','igdas','iski','aski','asat','su fatura','su abone','cep telefon','hat ucret'],'Fatura & Abonelik'],
+ [['vergi','sgk','maliye','gelir idaresi','beyanname','damga','muhtasar','stopaj','kdv beyan','kdv tahakkuk','kdv odeme','gecici vergi','mtv','harc'],'Vergi & SGK'],
+ /* v59: kart ekstresine özgü kalemlerin hiç ipucu yoktu — aidat, faiz, gecikme,
+    nakit avans, kart/ekstre ücreti hep "Diğer Gider"e düşüyordu. */
+ [['komisyon','havale','eft','masraf','isletim','bsmv','kkdf','hesap ucret','kart ucret','ekstre ucret','islem ucret','havale ucret','eft ucret','aidat','faiz','gecikme faiz','akdi faiz','nakit avans','fast odeme','fast transfer','banka ucret','kredi tahsis','dosya masraf','servis ucret'],'Banka & Komisyon'],
+ [['akaryakit','benzin','motorin','petrol','opet','shell','bp','lukoil','total','po petrol'],'Diğer Gider'],
+ [['bakim','onarim','tamir','servis','yedek parca','teknik servis','arac bakim'],'Bakım & Onarım'],
+ [['reklam','ilan','google','meta','instagram','facebook','yemeksepeti','getir yemek','getir market','trendyol','sosyal medya','sponsorlu','afis','katalog'],'Pazarlama']
 ];
+var _EKSTRE_IPUCU=null;
+function ekstreIpuclari(){
+ if(_EKSTRE_IPUCU)return _EKSTRE_IPUCU;
+ _EKSTRE_IPUCU=EKSTRE_IPUCU_KOK.map(function(x){return [ekstreKokKalip(x[0]),x[1]];});
+ return _EKSTRE_IPUCU;
+}
+/* v59: eski ad korunur — başka bir yerden okunursa kırılmasın */
+var EKSTRE_IPUCU=[];
+try{EKSTRE_IPUCU=ekstreIpuclari();}catch(e){}
 /* v48 DENETİM (KRİTİK): ipucu tablosunda uygulamanın kategori listesinde OLMAYAN
    adlar vardı ("Ulaşım & Yakıt", "Temizlik", "Pazarlama & Reklam"). <select> onları
    gösteremediği için kullanıcı "Hammadde & Malzeme" görüyor, kayıt başka kategoriyle
@@ -12065,19 +12106,9 @@ function ekstreKatGecerli(k,yon){
  }catch(e){}
  return yon==='giris'?'Diğer Gelir':'Diğer Gider';
 }
-function ekstreKategori(aciklama,yon){
- if(yon==='virman')return 'Grup İçi';
- /* v53: tüm kalıplar artık Türkçe-sadeleşmiş küçük harf metne uygulanır (bkz. yukarı) */
- var a=trNorm(aciklama);
- if(yon==='giris'){
-  /* v48 DENETİM: her giriş "Satış Geliri" sayılıyordu — iade/havale de ciro oluyordu */
-  if(/\b(iade|refund|ret|iptal)\b/.test(a))return ekstreKatGecerli('Diğer Gelir','giris');
-  if(/\b(pos|kart|satis|tahsil|tahsilat|musteri|siparis)\b/.test(a))return ekstreKatGecerli('Satış Geliri','giris');
-  return ekstreKatGecerli('Diğer Gelir','giris');
- }
- for(var i=0;i<EKSTRE_IPUCU.length;i++)if(EKSTRE_IPUCU[i][0].test(a))return ekstreKatGecerli(EKSTRE_IPUCU[i][1],'cikis');
- return 'Diğer Gider';
-}
+/* v59: kategori belirleme ekstreKatBelirle'ye taşındı (kaynağı da döner: hafıza /
+   ipucu / varsayılan / kart-giris). Bu sarmalayıcı eski çağrı yerlerini korur. */
+function ekstreKategori(aciklama,yon,tur){ return ekstreKatBelirle(aciklama,yon,tur).kat; }
 
 /* ---------- 1) başlat ---------- */
 function ekstreYukle(tur,hedefId){
@@ -12096,6 +12127,7 @@ function ekstreYukle(tur,hedefId){
  if(!liste.length){toast(tur==='kart'?'Önce bir kredi kartı tanımlayın':'Önce bir banka/kasa hesabı tanımlayın');return;}
  /* v48 DENETIM: co - kaydetme aninda CO degismis olabilir; iptal - modal kapaninca
     suren okumanin ekrani geri acmasini engeller. */
+ _ekTopluKat='';ekstreHafizaBekleyenTemizle();   /* v59b: panel seçimi ve bekleyen hafıza her yüklemede sıfırlanır */
  EKSTRE={hedef:hedefId||liste[0].id,tur:tur,co:CO,satirlar:[],ham:'',hata:null,tablo:null,
          dosya:0,okunan:0,calisiyor:false,iptal:false,token:nid()};
  document.getElementById('modalBox').innerHTML=
@@ -12163,9 +12195,11 @@ function ekstreAISatirEkle(j,kaynak,tur){
    uyari.push('Bu çıkış GİDER gibi görünmüyor (kredi anapara / vergi avansı / ortak / döviz / vadeli / teminat / demirbaş / grup içi) — kâr-zarara girmez olarak işaretlendi, gerçekten giderse yönü "çıkış" yapın');
   }
   if(!tarih&&s.tarih) uyari.push('Tarih okunamadı ('+String(s.tarih).slice(0,20)+') — elle girin');
+  var _kb=ekstreKatBelirle(ac,yon,tur);
   EKSTRE.satirlar.push({
    sec:tutar>0&&!!tarih&&!uyari.length, tarih:tarih, aciklama:ac,
-   tutar:tutar, yon:yon, kat:ekstreKategori(ac,yon), ham:String(s.ham||s.aciklama||'').slice(0,200),
+   tutar:tutar, yon:yon, kat:_kb.kat, katKaynak:_kb.kaynak, taksit:1,
+   ham:String(s.ham||s.aciklama||'').slice(0,200),
    uyari:uyari, kaynak:kaynak
   });
   n++;
@@ -12355,10 +12389,31 @@ function ekstreOnizle(hata){
      /* v51: kart ekstresinde virman yoktur \u2014 se\u00e7enek yaln\u0131zca banka hesab\u0131nda \u00e7\u0131kar */
      (_kartEk?'':'<option value="virman"'+(s.yon==='virman'?' selected':'')+'>\u21c4 Virman / kart \u00f6demesi</option>')+'</select></td>'+
    '<td><input type="text" data-ek="tutar" data-i="'+i+'" value="'+esc(tutarStr)+'" style="max-width:120px;text-align:right"></td>'+
-   '<td>'+((s.yon==='virman'||(_kartEk&&s.yon==='giris'))
-     ? '<span class="chip g">'+(_kartEk?'kart borcunu d\u00fc\u015f\u00fcr\u00fcr':'gelir-gider say\u0131lmaz')+'</span>'
-     : '<select data-ek="kat" data-i="'+i+'">'+opts.map(function(c){
-        return '<option value="'+esc(c)+'"'+(c===s.kat?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select>')+'</td>'+
+   /* v59: KATEGORİ HÜCRESİ YENİDEN YAZILDI.
+      · kart ödemesi (iade olmayan giriş) → kaleme yazılmaz, bunu söyler
+      · kart İADESİ → "hangi gider kalemini geri alıyor" seçicisi (eskiden hepsi
+        tek bir "Gider İadesi" kalemine gidiyor, hangi kalemden düştüğü kayboluyordu)
+      · hafızadan gelen kategori 🧠 ile işaretlenir ve tek tıkla unutturulur */
+   '<td>'+(!ekstreKatAlirMi(s)
+     ? '<span class="chip g">'+(s.yon==='virman'?'gelir-gider sayılmaz':'kart borcunu düşürür · kaleme yazılmaz')+'</span>'
+     : '<select data-ek="kat" data-i="'+i+'">'+
+        (s.kat?'':'<option value="" selected>— seçilmedi —</option>')+
+        opts.map(function(c){
+        return '<option value="'+esc(c)+'"'+(c===s.kat?' selected':'')+'>'+esc(c)+'</option>';}).join('')+'</select>'+
+        (ekstreIadeMi(s)?'<div class="tiny" style="color:var(--ink3)">bu kalemden düşülecek</div>':'')+
+        (s.katKaynak==='hafiza'?'<div class="tiny">🧠 hatırlandı: <b>'+esc(ekstreMagazaAnah(s.aciklama))+'</b> <button class="btn sm gh" data-act="ekstreHafizaUnut" data-arg="'+i+'" title="Bu mağaza için hatırlanan kategoriyi sil">unut</button></div>':'')+
+        (s.katKaynak==='elle'&&_ekHatirla&&ekstreSatirYon(s)==='cikis'?'<div class="tiny" style="color:var(--ink3)">🧠 <b>'+esc(ekstreMagazaAnah(s.aciklama))+'</b> olarak hatırlanacak (kayıtta işlenir)</div>':'')
+     )+'</td>'+
+   /* v59: TAKSİT. Ekstre taksitli harcamayı o ayın taksit tutarıyla yazar; satırda
+      taksit sayısı girilince toplam = aylık × N olarak kurulur, kart borcu ve
+      "Toplam Kalan Borç" doğru çıkar. */
+   '<td>'+(ekstreTaksitAc(s)
+     ? '<input type="number" min="1" max="36" step="1" data-ek="taksit" data-i="'+i+'" value="'+esc(String(ekstreTaksitSay(s)))+'" style="max-width:58px;text-align:center" title="Bu harcama kaç taksit?">'+
+       (ekstreTaksitSay(s)>1
+        ? ' <span class="tiny">/</span> <input type="number" min="1" max="36" step="1" data-ek="kacinci" data-i="'+i+'" value="'+esc(String(ekstreTaksitKacinci(s)))+'" style="max-width:58px;text-align:center" title="Bu satır kaçıncı taksit? Ekstrede 4/6 yazıyorsa 4 girin">'
+        : '')+
+       '<div class="tiny" id="ekTakNot'+i+'">'+esc(ekstreTaksitNotu(s)||'')+'</div>'
+     : '<span class="tiny" style="color:var(--ink3)">—</span>')+'</td>'+
    '</tr>'; }).join('');
  document.getElementById('modalBox').innerHTML=
   '<div class="mh"><h3>📷 Okunan Satırlar — onayınız bekleniyor</h3><button data-act="closeModal" style="font-size:20px;color:var(--ink3)">✕</button></div>'+
@@ -12373,12 +12428,12 @@ function ekstreOnizle(hata){
      'bu satırları işaretlemeden bırakın.</div></div>':'')+
    /* v49 DENETIM: hata metinleri kacissiz basiliyordu; AI/sunucu kaynakli mesaj HTML tasiyabilir */
    (hata&&hata.length?'<div class="nvWarn"><div>⚠ '+esc(hata.join(' · '))+'</div></div>':'')+
-   ekstreEslemeCubugu()+ekstreAtlananKart()+
+   ekstreEslemeCubugu()+ekstreAtlananKart()+ekstreKatPaneli()+
    '<div class="filters" style="margin-bottom:8px">'+
     '<button class="btn sm gh" data-act="ekstreHepsi" data-arg="1">☑ Hepsini seç</button>'+
     '<button class="btn sm gh" data-act="ekstreHepsi" data-arg="0">☐ Hiçbirini seçme</button>'+
     '<span class="tiny" style="align-self:center" id="ekstreOzet"></span></div>'+
-   '<div style="overflow:auto;max-height:52vh"><table><thead><tr><th></th><th>Tarih</th><th>Açıklama</th><th>Yön</th><th class="num">Tutar</th><th>Kategori</th></tr></thead><tbody>'+
+   '<div style="overflow:auto;max-height:52vh"><table><thead><tr><th></th><th>Tarih</th><th>Açıklama</th><th>Yön</th><th class="num">Tutar</th><th>Kategori</th><th>Taksit</th></tr></thead><tbody>'+
     satirHtml+'</tbody></table></div>'+
    '<p class="tiny" style="margin-top:8px">⚠ Yapay zeka okuması <b>kontrol edilmelidir</b>. Tarih, tutar ve yön alanlarını gözden geçirin; yanlış okunan satırı buradan düzeltebilir ya da işaretini kaldırabilirsiniz.</p>'+
   '</div>'+
@@ -12403,10 +12458,42 @@ function ekstreBind(){
   var es=el.getAttribute('data-ekes');
   if(es){ ekstreEslemeDegis(es,el.value); return; }
   var k=el.getAttribute('data-ek');if(!k)return;
+  if(k==='toplukat'){ ekstreTopluKatSec(el.value); return; }   /* v59: panel seçicisi satır taşımaz */
   var i=+el.getAttribute('data-i');var s=EKSTRE.satirlar[i];if(!s)return;
   if(k==='sec'){s.sec=!!el.checked; if(s.sec&&s.muk)s.mukOnay=true;}   /* v48: elle onaylandi */
   else if(k==='tutar'){s.tutar=Math.abs(parseAmt(el.value)||0);}
-  else if(k==='yon'){s.yon=el.value;s.kat=ekstreKategori(s.aciklama,s.yon);ekstreOnizle(EKSTRE.hata);return;}
+  else if(k==='yon'){
+   s.yon=el.value;
+   var _kb=ekstreKatBelirle(s.aciklama,s.yon,EKSTRE.tur);
+   s.kat=_kb.kat;s.katKaynak=_kb.kaynak;
+   if(s.yon!=='cikis')s.taksit=1;   /* taksit yalnız harcamada anlamlı */
+   ekstreOnizle(EKSTRE.hata);return;
+  }
+  else if(k==='taksit'||k==='kacinci'){
+   /* v59b KRİTİK DÜZELTME — bu dal ekstreOnizle() çağırıyordu. Dinleyici `input`
+      olayına da bağlı olduğu için ilk basılan rakamda tüm modal yeniden çiziliyor,
+      odak kaybolup İKİ HANELİ taksit sayısı YAZILAMIYORDU; üstelik her tuş vuruşu
+      mükerrer taramasını tekrarlayıp kullanıcının elle onayladığı satırların
+      işaretini düşürüyordu. Artık yalnızca değer saklanır ve ilgili küçük bilgi
+      satırı YERİNDE güncellenir; yeniden çizim yok. */
+   var _n=kartTaksitSayisi(el.value);
+   if(_n>36)_n=36;
+   if(k==='taksit')s.taksit=_n; else s.kacinci=_n;
+   if(s.kacinci>s.taksit)s.kacinci=s.taksit;
+   ekstreTaksitNotGuncelle(i);
+   ekstreOzetle();
+   return;
+  }
+  else if(k==='kat'){
+   /* v59: elle seçilen kategori mağaza hafızasına yazılır (panel anahtarı açıksa).
+      save() SATIR BAŞINA ÇAĞRILMAZ — 60 satırlık bir ekstrede 60 bulut yazması
+      olurdu. Hafıza S'ye işlenir, kalıcı yazma ekstre kaydedilirken yapılır. */
+   s.kat=el.value;s.katKaynak='elle';
+   /* v59b: hafıza ANINDA değil, ekstre kaydedilince işlenir (vazgeçilirse eğitmez).
+      Yalnızca GİDER yönlü satırlar hatırlanır. */
+   if(_ekHatirla&&ekstreSatirYon(s)==='cikis')ekstreKatHafizaBekle(s.aciklama,s.kat);
+   ekstreOzetle();return;
+  }
   else s[k]=el.value;
   if(k==='tarih'||k==='tutar')s.muk=ekstreMukerrer(s,EKSTRE.hedef,EKSTRE.tur);
   ekstreOzetle();
@@ -12430,7 +12517,17 @@ function ekstreOzetle(){
   if(s.yon==='giris')g+=s.tutar; else if(s.yon==='cikis')c+=s.tutar; else v+=s.tutar; });
  var el=document.getElementById('ekstreOzet');
  var _k=(EKSTRE.tur==='kart');   /* v51: kart dilinde özet */
- if(el)el.innerHTML='<b>'+n+' satır seçili</b> · '+(_k?'harcama':'çıkış')+' <b style="color:var(--neg)">'+fmt0(c)+'</b> · '+(_k?'ödeme/iade':'giriş')+' <b style="color:var(--pos)">'+fmt0(g)+'</b>'+(v?' · virman <b>'+fmt0(v)+'</b>':'');
+ /* v59: kategorisi "Diğer"de kalan seçili satır sayısı özette görünür — kullanıcı
+    kaydetmeden önce panelden toplu atama yapabileceğini bilsin. */
+ var dig=0,tak=0;
+ EKSTRE.satirlar.forEach(function(s){
+  if(!s.sec)return;
+  if(ekstreKatAlirMi(s)&&(!s.kat||s.kat==='Diğer Gider'||s.kat==='Diğer Gelir'))dig++;
+  if(_k&&s.yon==='cikis'&&kartTaksitSayisi(s.taksit)>1)tak++;
+ });
+ if(el)el.innerHTML='<b>'+n+' satır seçili</b> · '+(_k?'harcama':'çıkış')+' <b style="color:var(--neg)">'+fmt0(c)+'</b> · '+(_k?'ödeme/iade':'giriş')+' <b style="color:var(--pos)">'+fmt0(g)+'</b>'+(v?' · virman <b>'+fmt0(v)+'</b>':'')
+  +(dig?' · <b style="color:var(--warn)">'+dig+' satır "Diğer" kaleminde</b>':'')
+  +(tak?' · 📆 '+tak+' taksitli':'');
 }
 
 /* ---------- 4) kaydet ---------- */
@@ -12446,7 +12543,14 @@ function ekstreKaydet(){
  if(eksik.length){toast('⛔ '+eksik.length+' satırda tarih ya da tutar geçersiz — düzeltin veya işaretini kaldırın');return;}
  var ileri=sec.filter(function(s){return s.tarih>todayISO();});
  var mukN=sec.filter(function(s){return s.muk;}).length;
- var g=0,c=0,v=0;sec.forEach(function(s){ if(s.yon==='giris')g+=s.tutar; else if(s.yon==='cikis')c+=s.tutar; else v+=s.tutar; });
+ /* v59b: taksitli satırda kart borcuna TOPLAM yazılır; onay metnindeki "net borç
+    değişimi" aylık tutarı topluyordu ve 1.000 ₺ × 12 taksitte "+1.000" diyip iki
+    satır altta "toplam 12.000" yazıyordu. Artık ikisi aynı rakamı anlatır. */
+ var g=0,c=0,v=0;sec.forEach(function(s){
+  var _t=(+sayiOku(s.tutar)||0);
+  if(EKSTRE.tur==='kart'&&s.yon==='cikis'&&ekstreTaksitPlanKurulur(s))_t=ekstreTaksitToplam(s);
+  if(s.yon==='giris')g+=_t; else if(s.yon==='cikis')c+=_t; else v+=_t;
+ });
  var _kOnay=(EKSTRE.tur==='kart');   /* v51: kart dilinde onay metni */
  uiConfirm(sec.length+' satır '+ekstreHedefAd()+(_kOnay?' kartına':' hesabına')+' kaydedilecek.\n\n'+
   (_kOnay
@@ -12454,6 +12558,27 @@ function ekstreKaydet(){
       '\n\nKart borcu net '+(c-g>=0?'+':'')+fmt0(c-g)+' değişecek.')
    : ('Giriş (gelir): '+fmt0(g)+'\nÇıkış (gider): '+fmt0(c)))+
   (v?('\nVirman / kart ödemesi: '+fmt0(v)+'  — kâr/zarara GİRMEZ, yalnızca kasa hareketi olarak işlenir'):'')+
+  (function(){
+   /* v59: taksitli satırlar kart borcunu AYLIK tutarın katı kadar artırır —
+      onay ekranı bunu açıkça söylemeli, kullanıcı sürprizle karşılaşmasın. */
+   if(EKSTRE.tur!=='kart')return '';
+   var plan=sec.filter(function(x){return x.yon==='cikis'&&ekstreTaksitPlanKurulur(x);});
+   var orta=sec.filter(function(x){return x.yon==='cikis'&&ekstreTaksitSay(x)>1&&ekstreTaksitKacinci(x)>1;});
+   var m='';
+   if(plan.length){
+    var top=plan.reduce(function(a,x){return a+ekstreTaksitToplam(x);},0);
+    var ayl=plan.reduce(function(a,x){return a+(+sayiOku(x.tutar)||0);},0);
+    m+='\n\n📆 '+plan.length+' satır 1. TAKSİT olarak işaretlendi: aylık '+fmt0(ayl)+
+       ', kart borcuna yazılacak toplam '+fmt0(top)+' (gider '+'aylara bölünür).';
+   }
+   if(orta.length){
+    m+='\n\n⚠ '+orta.length+' satır planın ORTASINDAN (ör. 4/6). Bir ekstre satırından geriye '+
+       'doğru alış kurulamaz; bu satırlar yalnızca O AYIN taksidi olarak yazılacak, '+
+       'kalan taksitler kart borcuna EKLENMEYECEK. Planın tamamını görmek isterseniz '+
+       'alışı "＋ Harcama" ile taksit sayısıyla girin.';
+   }
+   return m;
+  })()+
   (ileri.length?('\n\n⚠ '+ileri.length+' satırın tarihi GELECEKTE — yanlış okunmuş olabilir.'):'')+
   (mukN?('\n\n⚠ DİKKAT: '+mukN+' satır MÜKERRER ŞÜPHELİ (aynı gün, aynı tutarda kayıt zaten var). Yine de kaydedilecek.'):'')+
   '\n\nKayıtların açıklamasına "📷 ekstre" etiketi eklenecek. Devam edilsin mi?',
@@ -12470,6 +12595,23 @@ function ekstreKaydet(){
    var vir=(s.yon==='virman');
    if(EKSTRE.tur==='kart'){
     var cdid=nid();
+    /* v59: TAKSİT. Ekstre satırı taksitli bir harcamanın O AYKİ TAKSİDİNİ yazar.
+       Kullanıcı taksit sayısını girdiyse toplam = aylık × N olarak kurulur: kart
+       kaydı toplam tutarı ve taksit:N alır (kart borcu, limit kullanımı ve
+       "Toplam Kalan Borç" doğru çıkar), gider defteri ise N aya bölünür —
+       v57'de cari ödemesi için kurulan kuralın aynısı. */
+    var _aylik=Math.round((+sayiOku(s.tutar)||0)*100)/100;
+    /* v59b: PLAN yalnızca "1. taksit" satırında kurulur. Plan ortasındaki bir
+       satırdan geriye doğru alış kurulamaz (bkz. ekstreTaksitPlanKurulur). */
+    var _planKur=(s.yon==='cikis')&&ekstreTaksitPlanKurulur(s);
+    var _tN=_planKur?ekstreTaksitSay(s):1;
+    var _tToplamN=(s.yon==='cikis')?ekstreTaksitSay(s):1;
+    var _tKac=(s.yon==='cikis')?ekstreTaksitKacinci(s):1;
+    var _toplamTut=_planKur?Math.round(_aylik*_tN*100)/100:_aylik;
+    if(_tN>1){
+     var _pTest=Math.round((_toplamTut/_tN)*100)/100;
+     if(_pTest<=0||Math.round((_toplamTut-_pTest*(_tN-1))*100)/100<=0){_tN=1;_toplamTut=_aylik;}
+    }
     /* v49 DENETIM (KRITIK): 'virman' degeri 'giris' olmadigi icin HARCAMA'ya dusuyordu;
        cardDebt harcamayi borca EKLEDIGI icin kart borcu odemesi borcu artiriyordu
        (hata odemenin 2 kati). Yalnizca CIKIS harcamadir. */
@@ -12478,20 +12620,42 @@ function ekstreKaydet(){
        düşük raporlanıyordu (1.250 harcama + 300 iade → defterde 1.250, gerçek 950).
        Artık "Gider İadesi" kalemiyle bir alacak kaydı yazılır; net gider doğru çıkar. */
     var _iade=(s.yon==='giris'&&EKSTRE_KART_IADE.test(s.aciklama||''));
+    /* v59: iade satırının kalemi artık kullanıcının seçtiği GİDER kalemidir.
+       sumRange kontra kayıtları byCat (GİDER haritası) üzerinden düşürdüğü için
+       iade doğrudan o kalemi azaltır. Eskiden hepsi tek bir "Gider İadesi"
+       kalemine yazılıyordu: hangi kalemden düştüğü kayboluyor, kâr/zarar
+       tablosunda eksi bakiyeli yapay bir "Gider İadesi" satırı oluşuyordu. */
+    var _iadeKat=(_iade?((s.kat&&ekstreKatGecerli(s.kat,'cikis')===s.kat)?s.kat:'Gider İadesi'):'');
     yCard.push({id:cdid,co:eco,cardId:EKSTRE.hedef,type:(s.yon==='cikis'?'harcama':'odeme'),
-     amount:s.tutar,date:s.tarih,
-     cat:(s.yon==='cikis'?s.kat:(_iade?'Gider İadesi':'')),taksit:1,
-     desc:aciklama+(_iade?' (iade)':''),ekstre:1,ekstreGrup:icId});
+     amount:(s.yon==='cikis'?_toplamTut:s.tutar),date:s.tarih,
+     cat:(s.yon==='cikis'?s.kat:_iadeKat),taksit:_tN,
+     desc:aciklama+(_iade?' (iade)':'')
+      +(_tN>1?' ('+_tN+' taksit · ekstredeki aylık tutar '+fmt0(_aylik)+')':'')
+      +((!_planKur&&_tToplamN>1)?' ('+_tKac+'/'+_tToplamN+'. taksit — plan kurulmadı)':''),
+     ekstre:1,ekstreGrup:icId});
     if(s.yon==='cikis'){
-     yTx.push({id:nid(),co:eco,type:'gider',date:s.tarih,amount:s.tutar,accId:'',src:'card',
-      cardTxnId:cdid,cat:s.kat,desc:aciklama+' (kredi kartı)',ekstre:1,ekstreGrup:icId});
+     if(_tN<=1){
+      yTx.push({id:nid(),co:eco,type:'gider',date:s.tarih,amount:_aylik,accId:'',src:'card',
+       cardTxnId:cdid,cat:s.kat,
+       desc:aciklama+' (kredi kartı'+((!_planKur&&_tToplamN>1)?' · '+_tKac+'/'+_tToplamN+'. taksit':'')+')',
+       ekstre:1,ekstreGrup:icId});
+     }else{
+      var _acc2=0;
+      for(var _ti=0;_ti<_tN;_ti++){
+       var _part=(_ti===_tN-1)?Math.round((_toplamTut-_acc2)*100)/100:_aylik;
+       _acc2=Math.round((_acc2+_aylik)*100)/100;
+       yTx.push({id:nid(),co:eco,type:'gider',date:addMonthsClamped(s.tarih,_ti),amount:_part,accId:'',
+        src:'card',cardTxnId:cdid,cat:s.kat,taksitNo:(_ti+1)+'/'+_tN,
+        desc:aciklama+' (kredi kartı · taksit '+(_ti+1)+'/'+_tN+')',ekstre:1,ekstreGrup:icId});
+      }
+     }
     }else if(_iade){
-     ensureCat('gelir','Gider İadesi');
+     if(_iadeKat==='Gider İadesi')ensureCat('gelir','Gider İadesi');
      /* v52: iade bir GELİR değil, gider iptalidir. `kontra:true` ile gideri azaltır;
         eskiden ciroya giriyor ve "Toplam Gelir"i şişiriyordu (net kâr doğruydu). */
      yTx.push({id:nid(),co:eco,type:'gelir',date:s.tarih,amount:s.tutar,accId:'',src:'card',
-      cardTxnId:cdid,cat:'Gider İadesi',iade:1,kontra:true,
-      desc:aciklama+' (kredi kartı iadesi — gideri geri alır)',ekstre:1,ekstreGrup:icId});
+      cardTxnId:cdid,cat:_iadeKat,iade:1,kontra:true,
+      desc:aciklama+' (kredi kartı iadesi — '+_iadeKat+' kalemini geri alır)',ekstre:1,ekstreGrup:icId});
     }
     /* kart ÖDEMESİ (giriş, iade değil) gider/gelir yazmaz — yalnız kart borcunu düşürür */
    }else{
@@ -12505,6 +12669,16 @@ function ekstreKaydet(){
   });
   yCard.forEach(function(r){pushRec(S.cardTxns,r);});
   yTx.forEach(function(r){pushRec(S.txns,r);});
+  /* v59: kaydedilen satırların kategorileri mağaza hafızasına işlenir — gelecek
+     ekstrede aynı mağaza kendiliğinden doğru kaleme gelsin. Tek save() yeterli;
+     satır başına yazma yapılmaz. */
+  if(_ekHatirla){
+   sec.forEach(function(s2){
+    if(!s2.kat)return;
+    if(ekstreSatirYon(s2)==='cikis')ekstreKatHafizaBekle(s2.aciklama,s2.kat);
+   });
+   ekstreHafizaIsle(eco);
+  }else ekstreHafizaBekleyenTemizle();
   save();
   try{logAudit('Ekstre fotoğrafından kayıt',ekstreHedefAd()+' · '+n+' satır · giriş '+fmt0(g)+' / çıkış '+fmt0(c)+(v?' / virman '+fmt0(v):''));}catch(e){}
   closeModal();
@@ -15524,4 +15698,351 @@ function eksSayi(n){ return String(Math.round((+sayiOku(n)||0)*100)/100).replace
 function eksDosyaAdi(kok,ad){
  var t=String(ad||'').replace(/[^A-Za-z0-9ÇĞİÖŞÜçğıöşü ]+/g,'').replace(/\s+/g,'-').slice(0,40);
  return 'lole-'+kok+(t?'-'+t:'')+'-'+todayISO()+'.csv';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v59 — EKSTRE KATEGORİ PANELİ, MAĞAZA HAFIZASI, KART SATIRI DÜZELTMELERİ
+
+   Şikâyet: "Kredi kartı ekstresi PDF / Excel / fotoğraf olarak eklenince gelir
+   gider kategorisi seçimi yapılamıyor, Diğer Gelir olarak işleniyor. Kategori
+   seçim paneli ekleyelim o ekrana ve o ekranda yetersiz olan diğer detayları
+   analiz et geliştir."
+
+   Ölçülen üç ayrı sebep:
+     1) İPUCU KALIPLARI TÜRKÇE EKLERDE ÇALIŞMIYORDU (40 açıklamanın 25'i
+        "Diğer Gider"e düşüyordu) — EKSTRE_IPUCU_KOK ile düzeltildi.
+     2) KARTTA GİRİŞ SATIRINA GELİR KATEGORİSİ VERİLİYORDU. ekstreKategori
+        kart ekstresinde olduğunu bilmiyordu; ödeme/iade satırı "Diğer Gelir"
+        alıyor, önizlemede o satırda kategori seçici de basılmadığı için
+        kullanıcı düzeltemiyordu. Ekranda görülen "Diğer Gelir" tam olarak buydu.
+     3) TOPLU ATAMA YOKTU. 60 satırlık bir kart ekstresinde kategori tek tek
+        açılır menüden seçiliyor, aynı mağaza her ay yeniden soruluyordu.
+
+   Bu modül 2 ve 3'ü, ayrıca satır bazında taksit girişini karşılar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ───────── MAĞAZA → KATEGORİ HAFIZASI ─────────
+   Kullanıcının bir satıra elle verdiği kategori, o satırın "mağaza parmak izi"
+   ile birlikte ŞİRKET VERİSİNE yazılır (S.meta.ekstreKat). Sonraki yüklemede
+   ipuçlarından ÖNCE uygulanır. Şirket bazlıdır: aynı mağaza iki şirkette farklı
+   kaleme girebilir. Yedeklerde durur, ekip arasında paylaşılır. */
+var EKS_HAFIZA_SINIR=800;   /* mağaza kaydı üst sınırı (şirket başına) */
+/* parmak izinden atılacak kelimeler: şirket eki, şehir, şube, para birimi */
+/* şirket eki, şehir, para birimi, ekstre boilerplate'i — parmak izinden atılır */
+var EKS_GURULTU=/\b(a ?s|as|ltd|sti|tic|san|sanayi|ticaret|ve|ith|ihr|turkiye|istanbul|ankara|izmir|bursa|antalya|adana|konya|sube|subesi|no|tl|try|usd|eur|mail ?order|chip ?para)\b/g;
+/* v59b BULGU: ekstrenin kendi önekleri MARKA sanılıyordu. "INTERNET ALISVERIS
+   TRENDYOL" ile "INTERNET ALISVERIS MEDIAMARKT" ikisi de "internet" anahtarına
+   düşüyor, kullanıcı birine kategori verince diğeri de "🧠 hatırlandı" diye o
+   kategoriyle geliyordu. Bu kelimeler marka OLAMAZ. */
+var EKS_GENEL={internet:1,internetten:1,taksit:1,taksitli:1,alisveris:1,magaza:1,
+ odeme:1,odemesi:1,harcama:1,harcamasi:1,islem:1,islemi:1,pos:1,sanal:1,order:1,
+ uye:1,isyeri:1,temassiz:1,iade:1,ret:1,iptal:1,refund:1,return:1,puan:1,provizyon:1};
+function ekstreMagazaAnah(ac){
+ var a=(typeof trNorm==='function')?trNorm(ac):String(ac||'').toLowerCase();
+ /* v59b: noktalı kısaltma tek simgeye indirilir — "S.O.K" → "sok". Yoksa tek
+    harfli parçalar elenip anahtar ilçe adına ("kadikoy") düşüyordu. */
+ a=a.replace(/\b(?:[a-z]\.){2,}[a-z]?/g,function(m){return m.replace(/\./g,'');});
+ a=a.replace(/\b\d{1,2}[.\/-]\d{1,2}([.\/-]\d{2,4})?\b/g,' ')   /* tarih */
+    .replace(/\b\d[\d.,]*\b/g,' ')                              /* tutar / kart no */
+    .replace(EKS_GURULTU,' ')
+    /* v59b: alfanümerik markalar (A101, 7/24) korunur — eskiden rakamlar silinip
+       "a101 kadikoy" → "kadikoy" oluyor, A101 ile Ş.O.K aynı ilçede aynı anahtara
+       düşüyordu. Harf+rakam karışık simgeler marka sayılır. */
+    .replace(/[^a-z0-9 ]+/g,' ')
+    .replace(/\s+/g,' ').trim();
+ var kel=a.split(' ').filter(function(w){
+  if(w.length<3)return false;
+  if(EKS_GENEL[w])return false;        /* ekstre boilerplate'i marka olamaz */
+  if(/^\d+$/.test(w))return false;      /* saf sayı */
+  return true;
+ });
+ if(!kel.length)return '';
+ /* harf+rakam karışık ilk simge (a101, 7eleven) tek başına markadır */
+ for(var q=0;q<kel.length;q++)if(/[a-z]/.test(kel[q])&&/\d/.test(kel[q]))return kel[q];
+ /* Parmak izi şube adından ETKİLENMEMELİ: "MIGROS TICARET AS ISTANBUL" ile
+    "MIGROS TICARET AS KADIKOY" aynı mağazadır. Ölçümde üç kelime alınınca
+    ikincisi "migros kadikoy" olup eşleşmiyordu.
+    Kural: ilk anlamlı kelime yeterince uzunsa (>=6) tek başına marka sayılır;
+    kısa ise ("metro", "shell") ikinci kelime de alınır — yoksa "METRO GROS" ile
+    "METRO TURIZM" aynı mağaza sanılırdı. */
+ var k=(kel[0].length>=6)?kel[0]:kel.slice(0,2).join(' ');
+ return k.length>=3?k:'';
+}
+function ekstreKatHafiza(co){
+ S.meta=S.meta||{};
+ S.meta.ekstreKat=S.meta.ekstreKat||{};
+ var c=co||CO||'_';
+ if(!S.meta.ekstreKat[c]||typeof S.meta.ekstreKat[c]!=='object')S.meta.ekstreKat[c]={};
+ return S.meta.ekstreKat[c];
+}
+function ekstreKatHafizaOku(ac,co){
+ try{
+  var k=ekstreMagazaAnah(ac); if(!k)return '';
+  var v=ekstreKatHafiza(co)[k];
+  if(!v)return '';
+  /* Hafızadaki kategori sonradan silinmiş olabilir — listeye karşı doğrula,
+     yoksa <select> gösteremediği bir değerle kayıt yazılır (v48'deki hata). */
+  return (ekstreKatGecerli(v,'cikis')===v)?v:'';
+ }catch(e){return '';}
+}
+function ekstreKatHafizaYaz(ac,kat,co){
+ try{
+  if(!kat)return false;
+  if(ekstreKatGecerli(kat,'cikis')!==kat)return false;   /* yalnız geçerli GİDER kalemi */
+  var k=ekstreMagazaAnah(ac); if(!k)return false;
+  var H=ekstreKatHafiza(co);
+  if(!H[k]&&Object.keys(H).length>=EKS_HAFIZA_SINIR)return false;   /* sınırsız büyümesin */
+  H[k]=kat;
+  return true;
+ }catch(e){return false;}
+}
+function ekstreKatHafizaSil(ac,co){
+ try{ var k=ekstreMagazaAnah(ac); if(!k)return false; var H=ekstreKatHafiza(co); if(H[k]===undefined)return false; delete H[k]; return true; }catch(e){return false;}
+}
+/* Önizlemedeki "🧠 unut" düğmesi */
+function ekstreHafizaUnut(i){
+ var s=EKSTRE.satirlar[+i]; if(!s)return;
+ /* v59b: hatırlanan kategori ya KAYITLI hafızada ya BEKLEME TAMPONUNDA olabilir —
+    ikisi de temizlenir, ikisinden biri silindiyse işlem başarılıdır. */
+ var bek=false;
+ try{var _k=ekstreMagazaAnah(s.aciklama); if(_k&&_ekHafizaBekleyen[_k]!==undefined){delete _ekHafizaBekleyen[_k];bek=true;}}catch(e){}
+ var kay=ekstreKatHafizaSil(s.aciklama,EKSTRE.co);
+ if(kay)save();
+ if(kay||bek){
+  var _kb=ekstreKatBelirle(s.aciklama,s.yon,EKSTRE.tur);
+  s.kat=_kb.kat; s.katKaynak=_kb.kaynak;   /* kaynak da yenilenmeli */
+  toast('🧠 Bu mağaza için hatırlanan kategori silindi');
+  ekstreOnizle(EKSTRE.hata);
+ }else toast('Bu satır için hatırlanan kategori yok');
+}
+
+/* ───────── KATEGORİ BELİRLEME (kaynağıyla birlikte) ───────── */
+function ekstreKatBelirle(aciklama,yon,tur){
+ var _kart=(tur!==undefined&&tur!==null&&tur!=='')
+   ?(tur==='kart')
+   :!!(typeof EKSTRE!=='undefined'&&EKSTRE&&EKSTRE.tur==='kart');
+ if(yon==='virman')return {kat:'Grup İçi',kaynak:'kural'};
+ /* v59 KRİTİK: kart ekstresinde GİRİŞ = ödeme ya da iade. Gelir kategorisi YOKTUR.
+    Eskiden burada 'Diğer Gelir' dönüyordu ve önizleme o satırda seçici basmadığı
+    için kullanıcı bunu göremiyor/düzeltemiyordu. */
+ if(_kart&&yon==='giris'){
+  /* İADE satırı bir gider kalemini geri alır; o kalem genelde aynı mağazanın
+     hatırlanan kalemidir. Açıklamadaki "iade/ret/iptal" sözcüğü parmak izini
+     bozduğu için atılır, sonra hafızaya bakılır. Ödeme satırı kaleme yazılmaz. */
+  /* v59b: "iade/ret/iptal" artık EKS_GENEL'de olduğu için parmak izine hiç girmiyor;
+     okuma ve YAZMA anahtarı aynı çıkar. Eskiden okuma yolu bu kelimeleri ayrıca
+     siliyor, yazma yolu silmiyordu: "SHELL IADE" anahtarı "shell iade" olarak
+     yazılıp "shell" olarak aranıyor, kayıt ölü kalıyordu. */
+  try{
+   if(EKSTRE_KART_IADE.test(aciklama||'')){
+    var _h=ekstreHafizaVarMi(aciklama,(typeof EKSTRE!=='undefined'&&EKSTRE)?EKSTRE.co:null);
+    if(_h)return {kat:_h,kaynak:'hafiza'};
+   }
+  }catch(e){}
+  return {kat:'',kaynak:'kart-giris'};
+ }
+ if(yon==='giris'){
+  var ag=trNorm(aciklama);
+  if(/\b(iade|refund|ret|iptal)\b/.test(ag))return {kat:ekstreKatGecerli('Diğer Gelir','giris'),kaynak:'ipucu'};
+  if(/\b(pos|kart|satis|tahsil|tahsilat|musteri|siparis)\b/.test(ag))return {kat:ekstreKatGecerli('Satış Geliri','giris'),kaynak:'ipucu'};
+  return {kat:ekstreKatGecerli('Diğer Gelir','giris'),kaynak:'varsayilan'};
+ }
+ /* v59: kullanıcının kendi hafızası ipuçlarından ÖNCE gelir */
+ var h=ekstreHafizaVarMi(aciklama,(typeof EKSTRE!=='undefined'&&EKSTRE)?EKSTRE.co:null);
+ if(h)return {kat:h,kaynak:'hafiza'};
+ var a=trNorm(aciklama),IP=ekstreIpuclari();
+ for(var i=0;i<IP.length;i++)if(IP[i][0].test(a))return {kat:ekstreKatGecerli(IP[i][1],'cikis'),kaynak:'ipucu'};
+ return {kat:'Diğer Gider',kaynak:'varsayilan'};
+}
+
+/* ───────── TOPLU KATEGORİ PANELİ ───────── */
+var _ekTopluKat='';
+var _ekHatirla=true;
+/* v59b BULGU: satır başına yapılan kategori değişikliği S.meta'yı ANINDA
+   değiştiriyordu. Kullanıcı üç kategori deneyip "Vazgeç"e bastığında hiçbir kayıt
+   oluşmuyor ama hafıza o üç tahminle eğitilmiş oluyor ve sonraki ilgisiz bir
+   save() bunu buluta yazıyordu. Artık değişiklikler BEKLEME TAMPONUNDA durur,
+   yalnızca ekstre gerçekten kaydedilince S.meta'ya işlenir. */
+var _ekHafizaBekleyen={};
+function ekstreKatHafizaBekle(ac,kat){
+ try{
+  if(!kat)return false;
+  if(ekstreKatGecerli(kat,'cikis')!==kat)return false;
+  var k=ekstreMagazaAnah(ac); if(!k)return false;
+  _ekHafizaBekleyen[k]=kat;
+  return true;
+ }catch(e){return false;}
+}
+function ekstreHafizaBekleyenTemizle(){_ekHafizaBekleyen={};}
+function ekstreHafizaIsle(co){
+ var n=0;
+ try{
+  Object.keys(_ekHafizaBekleyen).forEach(function(k){
+   var H=ekstreKatHafiza(co);
+   if(!H[k]&&Object.keys(H).length>=EKS_HAFIZA_SINIR)return;
+   H[k]=_ekHafizaBekleyen[k];n++;
+  });
+ }catch(e){}
+ _ekHafizaBekleyen={};
+ return n;
+}
+/* Beklemede ya da kayıtlı hafızadan okuma — ekranda "hatırlandı" göstergesi için */
+function ekstreHafizaVarMi(ac,co){
+ var k=ekstreMagazaAnah(ac); if(!k)return '';
+ if(_ekHafizaBekleyen[k])return _ekHafizaBekleyen[k];
+ return ekstreKatHafizaOku(ac,co);
+}
+function ekstreTopluKatSec(v){_ekTopluKat=String(v||'');}
+function ekstreHatirlaTgl(){_ekHatirla=!_ekHatirla;ekstreOnizle(EKSTRE.hata);}
+/* kapsam: 'sec' = işaretli satırlar · 'magaza' = işaretli satırlarla aynı mağazanın TÜM satırları */
+function ekstreTopluUygula(kapsam){
+ var kat=_ekTopluKat;
+ if(!kat){toast('Önce panelden bir kategori seçin');return;}
+ /* v59b: kategori GELİR ya da GİDER listesinde olabilir; hangi satırlara
+    yazılabileceği satırın yönüne göre belirlenir. */
+ var gider=(ekstreKatGecerli(kat,'cikis')===kat);
+ var gelir=(ekstreKatGecerli(kat,'giris')===kat);
+ if(!gider&&!gelir){toast('Geçersiz kategori');return;}
+ var hedef=[],uymayan=0;
+ if(kapsam==='magaza'){
+  var anahtarlar={};
+  EKSTRE.satirlar.forEach(function(s){ if(s.sec){var k=ekstreMagazaAnah(s.aciklama); if(k)anahtarlar[k]=1;} });
+  if(!Object.keys(anahtarlar).length){toast('Önce en az bir satır işaretleyin — o mağazanın tüm satırlarına uygulanacak');return;}
+  EKSTRE.satirlar.forEach(function(s){
+   var k=ekstreMagazaAnah(s.aciklama);
+   if(k&&anahtarlar[k]&&ekstreKatAlirMi(s)){ if(ekstreKatUyar(s,kat))hedef.push(s); else uymayan++; }
+  });
+ }else{
+  EKSTRE.satirlar.forEach(function(s){
+   if(s.sec&&ekstreKatAlirMi(s)){ if(ekstreKatUyar(s,kat))hedef.push(s); else uymayan++; }
+  });
+ }
+ if(!hedef.length){
+  toast(uymayan
+   ? '⛔ Seçili satırların yönü bu kategoriye uymuyor — '+(gelir?'"'+kat+'" bir GELİR kalemi, gider satırına yazılamaz':'"'+kat+'" bir GİDER kalemi, gelir satırına yazılamaz')
+   : 'Kategori atanacak işaretli satır yok (kart ödemesi ve virman satırları kategori almaz)');
+  return;
+ }
+ var hn=0;
+ hedef.forEach(function(s){
+  s.kat=kat; s.katKaynak='elle';
+  /* v59b: hafıza GİDER kalemleri içindir; gelir satırının kategorisi hatırlanmaz
+     (aynı gönderici hem tahsilat hem başka bir şey olabilir) */
+  if(_ekHatirla&&gider&&ekstreSatirYon(s)==='cikis'&&ekstreKatHafizaBekle(s.aciklama,kat))hn++;
+ });
+ toast('✓ '+hedef.length+' satır → '+kat+(hn?' · '+hn+' mağaza hatırlanacak':'')
+  +(uymayan?' · '+uymayan+' satır yönü uymadığı için atlandı':''));
+ ekstreOnizle(EKSTRE.hata);
+}
+/* Bu satır bir GİDER kategorisi taşır mı?
+   - virman kâr/zarara girmez, kategorisi sabittir
+   - kart ÖDEMESİ (iade olmayan giriş) hiçbir kaleme yazılmaz
+   - kart İADESİ yazılır: hangi gider kalemini geri aldığı seçilir */
+function ekstreKatAlirMi(s){
+ if(!s)return false;
+ if(s.yon==='virman')return false;
+ if(EKSTRE.tur==='kart'&&s.yon==='giris')return ekstreIadeMi(s);
+ return true;
+}
+/* v59b KRİTİK DÜZELTME — BANKA EKSTRESİNDE DE AYNI SIKINTI.
+   Panel yalnızca GİDER kategorisi sunuyordu. Banka ekstresindeki bir GELİR satırına
+   toplu atama yapılınca satıra "Kira" yazılıyor; o satırın <select>'i gelir listesini
+   gösterdiği için hiçbir seçenek 'selected' olmuyor ve ekranda "Satış Geliri"
+   görünüyordu — kayıt ise "Kira" olarak gidiyordu. Üstelik sumRange bunu
+   byCatG['Kira'] diye GELİR kırılımına yazıyor, yani kâr/zarar tablosunda "Kira"
+   bir gelir kalemi olarak listeleniyordu. (v48'de kapatılan hata sınıfının aynısı.)
+   Artık her satırın KENDİ YÖNÜ kategoriyi belirler: bir satır yalnızca kendi
+   yönünün listesindeki bir kategoriyi kabul eder. */
+function ekstreSatirYon(s){
+ if(!s)return 'cikis';
+ if(s.yon==='giris'&&!(EKSTRE.tur==='kart'))return 'giris';
+ return 'cikis';   /* kart iadesi dahil: gider kalemi seçilir */
+}
+function ekstreKatUyar(s,kat){
+ /* kategori bu satırın yönü için geçerli mi? */
+ if(!kat)return false;
+ return ekstreKatGecerli(kat,ekstreSatirYon(s))===kat;
+}
+function ekstreIadeMi(s){
+ try{ return !!(s&&s.yon==='giris'&&EKSTRE.tur==='kart'&&EKSTRE_KART_IADE.test(s.aciklama||'')); }catch(e){return false;}
+}
+
+/* ───────── PANEL ÇİZİCİ ───────── */
+function ekstreKatPaneli(){
+ /* v59b: BANKA ekstresinde gelir satırı da var — panel İKİ listeyi birden sunar ve
+    hangi yöne ait olduğunu <optgroup> ile söyler. Eskiden yalnızca gider listesi
+    vardı; gelir satırına gider kategorisi yazılıyor, ekran başka bir şey
+    gösteriyordu (bkz. ekstreKatUyar). Kart ekstresinde gelir kalemi hiç olmadığı
+    için orada yalnız gider listesi çıkar. */
+ var kats=catOptsUser('gider').map(function(c){return Array.isArray(c)?c[0]:c;});
+ var katsG=catOptsUser('gelir').map(function(c){return Array.isArray(c)?c[0]:c;});
+ var _kartP=(EKSTRE.tur==='kart');
+ var girisVar=EKSTRE.satirlar.some(function(s){return ekstreSatirYon(s)==='giris'&&ekstreKatAlirMi(s);});
+ var secili=EKSTRE.satirlar.filter(function(s){return s.sec&&ekstreKatAlirMi(s);}).length;
+ /* kategorisi belirlenemeyen satırlar — kullanıcı neyi elle atayacağını bilsin */
+ var bos=EKSTRE.satirlar.filter(function(s){return ekstreKatAlirMi(s)&&(!s.kat||s.kat==='Diğer Gider'||s.kat==='Diğer Gelir');}).length;
+ var hafizadan=EKSTRE.satirlar.filter(function(s){return s.katKaynak==='hafiza';}).length;
+ var H=0;try{H=Object.keys(ekstreKatHafiza(EKSTRE.co)).length;}catch(e){}
+ var opt=function(c){return '<option value="'+esc(c)+'"'+(c===_ekTopluKat?' selected':'')+'>'+esc(c)+'</option>';};
+ return '<div class="card" style="margin-bottom:10px;padding:10px 12px">'+
+  '<h2 style="margin-bottom:6px">🏷 Kategori Paneli'+
+   (bos?' <span class="chip w">'+bos+' satır Diğer/boş</span>':' <span class="chip g">tüm satırlar kalemli</span>')+
+   (hafizadan?' <span class="chip p">🧠 '+hafizadan+' satır hatırlandı</span>':'')+'</h2>'+
+  '<div class="filters" style="gap:6px">'+
+   '<select data-ek="toplukat" style="min-width:170px">'+
+    '<option value="">— kategori seçin —</option>'+
+    ((!_kartP&&girisVar)
+     ?'<optgroup label="💸 Gider kalemleri (çıkış satırları)">'+kats.map(opt).join('')+'</optgroup>'+
+      '<optgroup label="💰 Gelir kalemleri (giriş satırları)">'+katsG.map(opt).join('')+'</optgroup>'
+     :kats.map(opt).join(''))+
+   '</select>'+
+   '<button class="btn sm" data-act="ekstreTopluUygula" data-arg="sec" title="İşaretli satırların hepsine bu kategoriyi yaz">✓ Seçili '+secili+' satıra uygula</button>'+
+   '<button class="btn sm gh" data-act="ekstreTopluUygula" data-arg="magaza" title="İşaretli satırlarla AYNI mağazanın bu ekstredeki tüm satırlarına yaz">🏬 Aynı mağazanın tümüne</button>'+
+   '<button class="btn sm '+(_ekHatirla?'':'gh')+'" data-act="ekstreHatirlaTgl" title="Atadığınız kategoriyi mağaza adıyla hatırla — gelecek ekstrelerde kendiliğinden gelsin">🧠 Hatırla'+(_ekHatirla?' ✓':'')+'</button>'+
+  '</div>'+
+  '<p class="tiny" style="margin:6px 0 0;color:var(--ink2)">Bir satırı işaretleyip <b>🏬 Aynı mağazanın tümüne</b> derseniz o mağazanın bu ekstredeki bütün satırları aynı kaleme girer. '+
+   '<b>🧠 Hatırla</b> açıkken verdiğiniz kategori mağaza adıyla saklanır (ekstreyi kaydedince işlenir); gelecek ay aynı ekstre neredeyse hazır gelir'+
+   (H?' (şu an '+H+' mağaza hatırlanıyor)':'')+'.'+
+   ((!_kartP&&girisVar)?' <b>Gelir kalemi</b> yalnızca giriş satırlarına, <b>gider kalemi</b> yalnızca çıkış satırlarına yazılır — yönü uymayan satırlar atlanır.':'')+'</p>'+
+  '</div>';
+}
+
+/* ───────── SATIR BAZINDA TAKSİT ─────────
+   Banka/kart ekstresi taksitli bir harcamayı O AYIN TAKSİT TUTARIYLA yazar; bu
+   yüzden içe aktarılan satırlar taksit bilgisi taşımıyor, "Toplam Kalan Borç"
+   gerçeğin altında kalıyordu (uygulamanın kendi uyarısı da bunu söylüyordu).
+   Artık satıra taksit sayısı girilebilir. Varsayım AÇIKÇA yazılır: ekrandaki
+   tutar AYLIK taksittir, toplam = aylık × N olarak kurulur. */
+function ekstreTaksitAc(s){ return !!(EKSTRE.tur==='kart'&&s&&s.yon==='cikis'); }
+function ekstreTaksitSay(s){ var n=kartTaksitSayisi(s&&s.taksit); if(n>36)n=36; return n>1?n:1; }
+function ekstreTaksitKacinci(s){
+ var n=kartTaksitSayisi(s&&s.kacinci),t=ekstreTaksitSay(s);
+ if(n<1)n=1; if(n>t)n=t; return n;
+}
+function ekstreTaksitToplam(s){ return Math.round((+sayiOku(s.tutar)||0)*ekstreTaksitSay(s)*100)/100; }
+/* v59b KRİTİK DÜZELTME — PLAN ORTASINDAKİ SATIR.
+   Bir Türk kart ekstresindeki taksit satırı genellikle ZATEN YÜRÜYEN bir planın
+   O AYKİ taksididir ("ARÇELİK TAKSİT 4/6"). Kod her satırı 1. taksit sayıyordu:
+   Nisan ekstresinden "6 taksit" girilince kart borcu 6.000 yazılıyor (gerçek
+   kalan 3.000), gider Nisan-Eylül'e bölünüyor (oysa 1-3 Ocak-Mart'ta doğdu) ve
+   Mayıs ekstresi aynı alışı BİR KEZ DAHA ekliyordu (mükerrer denetimi 3 günlük
+   pencereye baktığı için yakalamıyor).
+   Artık "kaçıncı taksit" sorulur:
+     · 1. taksit  → tüm plan kurulur (kart borcu = aylık × N, gider N aya bölünür)
+     · ortadaki   → PLAN KURULMAZ; yalnızca o ayın taksidi tek bir gider olarak
+                    yazılır. Plan bir tek satırdan geriye doğru kurulamaz; yanlış
+                    kurmak yerine dürüst davranılır ve ekranda söylenir. */
+function ekstreTaksitPlanKurulur(s){ return ekstreTaksitSay(s)>1&&ekstreTaksitKacinci(s)===1; }
+function ekstreTaksitNotu(s){
+ var n=ekstreTaksitSay(s);
+ if(n<=1)return '';
+ var k=ekstreTaksitKacinci(s);
+ if(k===1)return 'toplam '+fmt0(ekstreTaksitToplam(s))+' · '+n+' aya bölünür';
+ return '⚠ '+k+'/'+n+' — plan kurulmaz, yalnız bu taksit yazılır';
+}
+function ekstreTaksitNotGuncelle(i){
+ try{
+  var el=document.getElementById('ekTakNot'+i);
+  if(el)el.innerHTML=esc(ekstreTaksitNotu(EKSTRE.satirlar[i])||'');
+ }catch(e){}
 }
