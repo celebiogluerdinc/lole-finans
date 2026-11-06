@@ -663,6 +663,9 @@ function pickRec(a,b){
 }
 function mergeStates(remote,local){ // remote: fixState'ten geçmiş uzak durum (taban) — local: bizim S
  var out=remote;
+ /* v60: out.meta aşağıda bütün olarak local.meta ile değiştirilebilir — uzak taraftaki
+    mutabakat işaretlerini ÖNCE alıyoruz, yoksa birleştirilecek bir şey kalmıyor. */
+ var remoteOM=(remote&&remote.meta)?remote.meta.ortakMut:null;
  var localNewer=String((local.meta&&local.meta.saved)||'')>=String((out.meta&&out.meta.saved)||'');
  MERGE_ARRAYS.forEach(function(k){
   var ra=Array.isArray(out[k])?out[k]:[]; var la=Array.isArray(local[k])?local[k]:[];
@@ -679,6 +682,25 @@ function mergeStates(remote,local){ // remote: fixState'ten geçmiş uzak durum 
  }catch(e){}
  out.seq=Math.max(+out.seq||0,+local.seq||0)+1;
  if(localNewer){ out.cats=local.cats||out.cats; out.meta=local.meta||out.meta; out.ai=local.ai||out.ai; out.aiCache=local.aiCache||out.aiCache; out.user=local.user||out.user; out.authPw=local.authPw||out.authPw; }
+ /* v60: ortak mutabakat işaretleri meta içinde durur, meta ise BÜTÜN olarak son yazana
+    teslim edilir. Ortak telefonundan tik atarken yönetici bilgisayardan kayıt yapınca
+    tikler sessizce yok oluyordu. Bu alan ANAHTAR ANAHTAR birleştirilir; kaldırma da bir
+    kayıttır ({sil:1}) ve en yeni `at` kazanır — yoksa kaldırılan tik geri dirilirdi. */
+ try{
+  var _rOM=(remoteOM&&typeof remoteOM==='object'&&!Array.isArray(remoteOM))?remoteOM:null;
+  var _lOM=(local&&local.meta&&local.meta.ortakMut&&typeof local.meta.ortakMut==='object'&&!Array.isArray(local.meta.ortakMut))?local.meta.ortakMut:null;
+  if(_rOM||_lOM){
+   var _m={};
+   [_rOM,_lOM].forEach(function(src){ if(!src)return; Object.keys(src).forEach(function(k){
+    var v=src[k]; if(!v||typeof v!=='object')return;
+    var ex=_m[k]; if(!ex){_m[k]=v;return;}
+    var a=String(v.at||''),b=String(ex.at||'');
+    /* EŞİTLİKTE KALDIRMA KAZANIR: aynı damgayla gelen bir tik, açıkça kaydedilmiş
+       ve günlüğe yazılmış bir "mutabakatı boz" işlemini geri alamaz. */
+    if(a>b||(a===b&&v.sil&&!ex.sil))_m[k]=v; }); });
+   out.meta=out.meta||{}; out.meta.ortakMut=_m;
+  }
+ }catch(e){}
  return out;
 }
 function showConflictModal(current){
@@ -2009,9 +2031,23 @@ function softDelete(arr,id,kind,labelFn){
 function cascadeSoftDelete(arr,matchFn){
  arr.forEach(function(t){ if(matchFn(t)&&!t.deletedAt){ t.deletedAt=new Date().toISOString(); t.deletedBy=SESSION?SESSION.username:''; } });
 }
+/* v60: del()'in sileceği ANA kaydı türünden bulur (yetki kapısı için) */
+function delKaydiBul(kind,id){
+ try{
+  var A={acc:S.accounts,tx:S.txns,pos:S.pos,posE:S.posEntries,card:S.cards,cardT:S.cardTxns,
+   cari:S.cari,cariT:S.cariTxns,staffPerma:S.staff,staffT:S.staffTxns,leave:S.leaves,
+   fixed:S.fixed,fixedL:S.fixedLogs,task:S.tasks,note:S.notes,cek:S.cheques,
+   stok:S.stock,stokT:S.stockTxns,asset:S.assets,budget:S.budgets}[kind];
+  return A?A.find(function(x){return x.id===id;}):null;
+ }catch(e){return null;}
+}
 function del(kind,id){
  if(!can(delPermOf(kind))){ /* v46: TEK NOKTADAN kapı — 20 kayıt türünü birden korur */
   toast('⛔ Silme yetkiniz yok — '+roleLabel(SESSION?SESSION.role:'user')+' rolünde bu kapalı. Gerekiyorsa yöneticinizden isteyin.');return;}
+ /* v60 MUTABAKAT KİLİDİ: ortakla mutabık kalınmış bir hareket silinemez. Burada,
+    tek kapıda durur — yoksa aynı kayıt nakit eşi ('tx'), kart eşi ('cardT') ya da
+    cari üstünden kaskadla sessizce giderdi. Kilidi açmak ayrı ve kayıtlı bir adımdır. */
+ if(typeof ortakMutKilitUyar==='function'&&ortakMutKilitUyar(kind,id))return;
  var R={
   acc:['Hesap silinsin mi? (Çöp kutusuna taşınır)',()=>{var _n=S.txns.filter(t=>(t.accId===id||t.accId2===id)&&!t.deletedAt).length;if(_n){toast('⛔ Hareketi olan hesap silinemez — "⏸ Pasife Al" kullanın');return;}softDelete(S.accounts,id,'acc',r=>'Hesap: '+r.name);}],
   tx:['İşlem silinsin mi? (Bağlı kayıtlar da birlikte silinir; taksitli kart harcamasında TÜM taksitler birlikte silinir; 30 gün içinde geri getirilebilir)',()=>{const rec=softDelete(S.txns,id,'tx',r=>(r.type==='gelir'?'Gelir':r.type==='gider'?'Gider':'Virman')+': '+fmt0(r.amount)+(r.desc?' - '+r.desc:r.cat?' - '+r.cat:''));if(rec){cascadeSoftDelete(S.fixedLogs,l=>l.txnId===id);
@@ -2042,6 +2078,14 @@ function del(kind,id){
  }[kind];
  if(kind==='acc'){var _lt=S.txns.filter(function(t){return (t.accId===id||t.accId2===id)&&!t.deletedAt;}).length;if(_lt){toast('⛔ Bu hesapta '+_lt+' yaşayan işlem var — hesap silinirse bu işlemler sahipsiz kalır ve denetimde hata üretir. Bunun yerine hesap kartındaki "⏸ Pasife Al" düğmesini kullanın: bakiyesi ve geçmişi korunur, yalnızca yeni işlem listelerinden gizlenir.');return;}}
  if(kind==='cari'){var _sc=S.cari.find(function(x){return x.id===id;});if(_sc&&_sc.sys){toast('⛔ Bu bir SİSTEM hesabıdır (merkez / ortak) — silinemez. Gerekiyorsa hareketlerini tek tek silin.');return;}}
+ /* v60 DENETİM (KRİTİK, v60 öncesinden duran hata): şirket erişimi kontrolü yalnız
+    softDelete'in İÇİNDE vardı. Erişimi olmayan kullanıcı silmeye basınca ANA kayıt
+    korunuyor ("⛔ Bu şirkette silme yetkiniz yok"), ama hemen ardından çalışan
+    kaskad ve icCascade KARŞI defterdeki tüm bacakları siliyor, çöp kutusuna ise
+    HİÇBİR ŞEY yazılmıyordu: ekranda "çöp kutusuna taşındı" diyen, geri getirilemez
+    bir kayıp. Kapı artık silme başlamadan önce. */
+ var _hedef=delKaydiBul(kind,id);
+ if(_hedef&&!canAccessCo(_hedef.co||CO)){toast('⛔ Bu şirkette silme yetkiniz yok — hiçbir kayıt değiştirilmedi');return;}
  var _icr=(typeof icRecFind==='function')?icRecFind(kind,id):null; var _icid=_icr&&_icr.icId;   /* v33: grup içi işlem — 2 defterdeki tüm karşı kayıtlar birlikte gider */
  if(_icid&&R){var _f0=R[1];R=[R[0]+' — ⚠ Bu bir GRUP İÇİ (merkez) işlemdir: HER İKİ defterdeki tüm karşı kayıtlar da birlikte silinir.',function(){_f0();icCascade(_icid);}];}
  if(R)askDel(R[0],R[1]);
@@ -8273,6 +8317,15 @@ function accDetail(id){
 }
 function cariDetail(id){
  const c=S.cari.find(x=>x.id===id&&!x.deletedAt);if(!c){toast('Cari bulunamadı');return;}
+ /* v60: ortak sistem hesapları (sermaye / ortak cari / kâr payı) bu ekrandan da
+    açılabiliyordu — hiçbir yetki kapısı yoktu. Kendi girişindeki bir ortak buradan
+    BAŞKA bir ortağın sermaye ekstresini ve Sil düğmelerini görüyordu. */
+ if(c.sys&&String(c.sys).indexOf('ortak:')===0){
+  var _opid=String(c.sys).split(':')[1]||'';
+  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+  if(typeof ortakGorunur==='function'&&!ortakGorunur(_opid)){toast('⛔ Yalnızca kendi ortak hesabınızı görebilirsiniz');return;}
+  if(typeof ortakEkstre==='function'&&partnerById(_opid)){ortakEkstre(_opid);return;}
+ }
  PAGE='cari';_navHi('cari');
  const b=cariBalance(c);
  const txs=S.cariTxns.filter(t=>t.cariId===id&&!t.deletedAt);
@@ -8779,13 +8832,18 @@ function onarIntegrity(arg){
  var toplam=hedef.reduce(function(s2,r){return s2+r.items.length;},0);
  uiConfirm(toplam+' yetim kayıt çöp kutusuna taşınacak ('+hedef.map(function(r){return r.title+': '+r.items.length;}).join(', ')+'). Bu kayıtların eşi/üst kaydı zaten silinmiş durumda; silme kaskadının yarım kalan işini tamamlıyoruz. 30 gün içinde çöp kutusundan geri alınabilir. Devam edilsin mi?',
  function(){
-  var ok=0,pos=0;
+  var ok=0,pos=0,kilitli=0;
   hedef.forEach(function(r){
    r.items.forEach(function(rec){
     try{
      if(r.title==='POS "geçti" ama gelir kaydı yok'){ rec.status='bekliyor'; rec.noAutoSettle=1; pos++; ok++; return; } /* v41: bayrak konmazsa autoSettlePos aynı geliri yeniden üretip parayı çoğaltıyordu */
      if(rec.deletedAt)return;
      var k=_integKind(rec); if(!k)return;
+     /* v60 MUTABAKAT KİLİDİ: bu onarım del() kapısından geçmez, doğrudan
+        softDelete+icCascade çağırır. Ortakla mutabık kalınmış bir hareketi
+        "yetim kayıt" sayıp sessizce silebiliyordu — ortağın onayladığı sermaye
+        ekrandan yok oluyor, tek iz "1 kayıt onarıldı" toast'ı oluyordu. */
+     if(typeof ortakMutKilitBul==='function'&&ortakMutKilitBul(k.kind,rec.id).length){kilitli++;return;}
      var lbl=(rec.title||rec.name||rec.desc||rec.kisi||('Tutar '+fmt0(rec.amount||rec.tutar||0)));
      if(softDelete(k.arr,rec.id,k.kind,function(){return 'Onarım: '+lbl;})){ ok++;
       if(rec.icId&&typeof icCascade==='function')icCascade(rec.icId); /* v41: grup içi kaydın diğer defterdeki bacakları da gitsin, ayna bozulmasın */
@@ -8793,9 +8851,10 @@ function onarIntegrity(arg){
     }catch(e){}
    });
   });
-  try{logAudit('Tutarlılık onarımı',ok+' yetim kayıt düzeltildi'+(pos?' ('+pos+' POS girişi bekliyora alındı)':''));}catch(e){}
+  try{logAudit('Tutarlılık onarımı',ok+' yetim kayıt düzeltildi'+(pos?' ('+pos+' POS girişi bekliyora alındı)':'')+(kilitli?' · '+kilitli+' kayıt MUTABAKATLI olduğu için atlandı':''));}catch(e){}
   save();
-  toast('🔧 '+ok+' kayıt onarıldı'+(pos?' · '+pos+' POS girişi "bekliyor"a alındı':'')+' — denetim yenileniyor');
+  toast('🔧 '+ok+' kayıt onarıldı'+(pos?' · '+pos+' POS girişi "bekliyor"a alındı':'')+
+   (kilitli?' · 🔒 '+kilitli+' kayıt ortakla mutabık olduğu için ATLANDI (önce mutabakatı bozun)':'')+' — denetim yenileniyor');
   setTimeout(function(){runIntegrity();},400);
  },{title:'🔧 Tutarlılık Onarımı',yes:'Evet, Onar'});
 }
@@ -8973,8 +9032,18 @@ function rMerkez(){
 }
 
 function merkezSonIslemlerCard(){
- var _ok={};merkezCos().forEach(function(c){var mc=findMerkezCari(c.id);if(mc)_ok[mc.id]=1;});
- if(canAccessCo('ortak'))S.cari.forEach(function(c){if(c.co==='merkez'&&c.sys&&String(c.sys).indexOf('ortak:')===0)_ok[c.id]=1;});
+ var _ok={},_ortakCari={};
+ merkezCos().forEach(function(c){var mc=findMerkezCari(c.id);if(mc)_ok[mc.id]=1;});
+ /* v60: kendi girişindeki bir ortak burada BAŞKA ortakların hareketlerini
+    görüyordu (ve yanlarında Sil düğmesini). Kısıtlı kullanıcıya yalnız kendi
+    hesapları gösterilir; 'Düzelt' düğmesi ortak satırlarında hiç basılmaz —
+    o yol ortak hesapları için zaten çalışmıyor ve "silip yeniden gir" diyor. */
+ if(canAccessCo('ortak'))S.cari.forEach(function(c){
+  if(c.co!=='merkez'||!c.sys||String(c.sys).indexOf('ortak:')!==0)return;
+  var pid=String(c.sys).split(':')[1]||'';
+  if(!ortakGorunur(pid))return;
+  _ok[c.id]=1;_ortakCari[c.id]=1;
+ });
  var list=S.cariTxns.filter(function(t){return t.co==='merkez'&&t.ic&&!t.deletedAt&&_ok[t.cariId];})
   .sort(function(a,b){return a.date<b.date?1:a.date>b.date?-1:0;}).slice(0,15);
  if(!list.length)return '<div class="card"><h2>Son Grup İçi Hareketler</h2><div class="empty"><b>Henüz merkez işlemi yok</b>Yukarıdaki düğmelerle ilk ödemeyi veya aktarımı yapın.</div></div>';
@@ -8983,7 +9052,10 @@ function merkezSonIslemlerCard(){
    var c=S.cari.find(function(x){return x.id===t.cariId;});
    return '<tr><td>'+dTR(t.date)+'</td><td>'+esc(c?c.name:'—')+'</td><td>'+esc(t.desc||'')+' '+(icCount(t.icId)<3?'<span class="chip n" title="Bu işlemin karşı kayıtları eksik">⚠ eksik</span>':'')+'</td>'+
     '<td class="num" style="color:'+(t.type==='borc'?'var(--neg)':'var(--pos)')+'">'+(t.type==='borc'?'−':'+')+fmt0(t.amount)+'</td>'+
-    '<td class="rowact">'+(t.icId?'<button class="btn sm gh" data-act="merkezDuzelt" data-arg="'+t.icId+'" title="İşlemi sil ve bilgileri dolu olarak yeniden aç">✎ Düzelt</button>':'')+'<button class="btn sm dng" data-act="del" data-arg="cariT~'+t.id+'">Sil</button></td></tr>';}).join('')+
+    '<td class="rowact">'+((t.icId&&!_ortakCari[t.cariId])?'<button class="btn sm gh" data-act="merkezDuzelt" data-arg="'+t.icId+'" title="İşlemi sil ve bilgileri dolu olarak yeniden aç">✎ Düzelt</button>':'')+
+     ((_ortakCari[t.cariId]&&typeof ortakMutKilitli==='function'&&ortakMutKilitli(t.id))
+      ?'<span class="tiny" title="Ortakla mutabık kalınmış kayıt — silinemez">🔒</span>'
+      :'<button class="btn sm dng" data-act="del" data-arg="cariT~'+t.id+'">Sil</button>')+'</td></tr>';}).join('')+
   '</tbody></table></div><p class="tiny" style="margin-top:8px"><b>✎ Düzelt:</b> yanlış girilen bir işlemi siler ve bilgileri dolu olarak yeniden açar — elle silip baştan yazmanıza gerek kalmaz. Bir kaydı sildiğinizde bu işlemin <b>her iki defterdeki tüm karşı kayıtları</b> birlikte çöp kutusuna gider; geri aldığınızda hepsi birlikte döner.</p></div>';
 }
 
@@ -9438,10 +9510,14 @@ function merkezCoDetail(coId){
 function rOrtak(){
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
  S.partners=S.partners||[];
- var ps=partnerList();
+ /* v60: ortak kendi kullanıcısıyla girdiyse yalnız kendi kartını görür */
+ var _ben=ortakBenKim(),_kisit=ortakKisitli();
+ var ps=partnerList().filter(function(p){return !_kisit||p.id===_ben;});
  var sermayeTop=0,cariTop=0,cekisTop=0;
  ps.forEach(function(p){sermayeTop+=ortakSermaye(p.id);cariTop+=ortakCariBal(p.id);cekisTop+=ortakCekis(p.id);});
- var payTop=ps.reduce(function(s,p){return s+(+p.share||0);},0);
+ /* hisse toplamı ve şirket dağıtımı DAİMA tüm ortaklardan hesaplanır — kısıtlı
+    görünümde (ortak kendi girişinde) o tablo hiç basılmaz, yarım veriyle basılmaz */
+ var payTop=partnerList().reduce(function(s,p){return s+(+p.share||0);},0);
  /* ortak katkılarının şirketlere oransal dağılımı */
  var toplamKatki=sermayeTop+cariTop;
  /* v43 (RAPOR DÜZELTMESİ): eskiden yalnızca 'borc' (merkezden şirkete giden) toplanıyor,
@@ -9460,9 +9536,20 @@ function rOrtak(){
  var gelenTop=coGiden.reduce(function(s,r){return s+r.gelen;},0);
  var netTop=Math.round((gidenTop-gelenTop)*100)/100;
 
- document.getElementById('main').innerHTML= topbar('👥 Ortaklar & Sermaye',
-  '<button class="btn" data-act="ortakForm">＋ Ortak Ekle</button><button class="btn gh" data-act="ortakKarPayiForm">🎁 Kâr Payı Dağıt</button>')+
- (Math.abs(payTop-100)>0.01&&ps.length?'<div class="card" style="margin-bottom:12px;padding:10px 14px"><span class="chip w">⚠ Hisse oranları toplamı %'+payTop.toFixed(1)+' — %100 olmalı</span></div>':'')+
+ var _mutT=ortakMutOzet('');
+ document.getElementById('main').innerHTML= topbar('👥 Ortaklar & Sermaye'+(_kisit?' — '+esc(((partnerById(_ben)||{}).name)||''):''),
+  (_kisit?'':'<button class="btn" data-act="ortakForm">＋ Ortak Ekle</button><button class="btn gh" data-act="ortakKarPayiForm">🎁 Kâr Payı Dağıt</button>'+
+   (_mutT.bekleyen?'<button class="btn gh" data-act="ortakMutDevir" title="İşaretsiz tüm geçmiş ortak hareketlerini devir mutabakatı olarak işaretler">✓ Geçmişi Devir Olarak İşaretle</button>':'')))+
+ (_kisit?'<div class="card" style="margin-bottom:12px;padding:10px 14px"><span class="chip g">👤 Kendi ortak hesabınızı görüyorsunuz</span> <span class="tiny">Ekstrenizdeki her satırı tek tek onaylayarak mutabakat verebilirsiniz.</span></div>':'')+
+ (!_kisit?ortakMutYetimKarti()+ortakYetkiUyariKarti():'')+
+ (!_kisit&&Math.abs(payTop-100)>0.01&&ps.length?'<div class="card" style="margin-bottom:12px;padding:10px 14px"><span class="chip w">⚠ Hisse oranları toplamı %'+payTop.toFixed(1)+' — %100 olmalı</span></div>':'')+
+ (!_kisit&&_mutT.n?'<div class="card" style="margin-bottom:12px;padding:10px 14px"><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">'+
+   '<b>🤝 Mutabakat durumu:</b><span class="chip g">'+_mutT.ortak+' ortak onaylı</span>'+
+   (_mutT.devir?'<span class="chip w">'+_mutT.devir+' devir</span>':'')+
+   (_mutT.yonetici?'<span class="chip w">'+_mutT.yonetici+' yönetici işaretli</span>':'')+
+   '<span class="chip">'+_mutT.bekleyen+' bekliyor</span>'+
+   (_mutT.degisti?'<span class="chip n">⚠ '+_mutT.degisti+' kayıt mutabakat sonrası değişti</span>':'')+
+   '<span class="tiny">toplam '+_mutT.n+' hareket</span></div></div>':'')+
  '<div class="grid g4" style="margin-bottom:16px">'+
   '<div class="kpi a"><div class="l">Toplam Sermaye</div><div class="v">'+fmt0(sermayeTop)+'</div><div class="s">'+ps.length+' ortak</div></div>'+
   '<div class="kpi p"><div class="l">Ortak Cari (borcumuz)</div><div class="v">'+fmt0(cariTop)+'</div><div class="s">ortakların çekebileceği</div></div>'+
@@ -9486,15 +9573,18 @@ function rOrtak(){
      '<b style="font-size:20px">'+fmt0(net)+'</b>'+
      (Math.abs(sapma)>1?'<div class="tiny" style="color:'+(sapma<0?'var(--warn)':'var(--ink3)')+'">'+(sapma<0?'▼ hissesine göre '+fmt0(-sapma)+' eksik koydu':'▲ hissesine göre '+fmt0(sapma)+' fazla koydu')+'</div>':'<div class="tiny">hissesiyle uyumlu</div>')+
      '</div></div>'+
+    /* v60: kartın üstünde mutabakat durumu ve bağlı kullanıcı */
+    '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">'+ortakMutKartChip(p.id)+
+     (ortakUserAdi(p.id)?'<span class="tiny">👤 '+esc(ortakUserAdi(p.id))+'</span>':'<span class="tiny" title="Bağlı kullanıcı olmadan ortak onayı verilemez">👤 kullanıcı bağlı değil</span>')+'</div>'+
     '<div class="cardBtns">'+
-     '<button class="btn sm in" data-act="ortakGirisForm" data-arg="'+p.id+'">💰 Para Girişi</button>'+
-     '<button class="btn sm out" data-act="ortakOdemeForm" data-arg="'+p.id+'">💸 Ortağa Ödeme</button>'+
+     (_kisit?'':'<button class="btn sm in" data-act="ortakGirisForm" data-arg="'+p.id+'">💰 Para Girişi</button>'+
+     '<button class="btn sm out" data-act="ortakOdemeForm" data-arg="'+p.id+'">💸 Ortağa Ödeme</button>')+
      '<button class="btn sm gh" data-act="ortakEkstre" data-arg="'+p.id+'">📄 Ekstre</button>'+
-     '<button class="btn sm gh" data-act="ortakForm" data-arg="'+p.id+'">✎</button>'+
-     '<button class="btn sm dng" data-act="ortakSil" data-arg="'+p.id+'">Sil</button>'+
+     (_kisit?'':'<button class="btn sm gh" data-act="ortakForm" data-arg="'+p.id+'">✎</button>'+
+     '<button class="btn sm dng" data-act="ortakSil" data-arg="'+p.id+'">Sil</button>')+
     '</div></div>';}).join('')+'</div>'
   :'<div class="card"><div class="empty"><b>Henüz ortak tanımlı değil</b>“＋ Ortak Ekle” ile ortakları ve hisse oranlarını girin; sermaye ve ortak cari hareketleri burada izlenir.</div></div>')+
- (gidenTop?'<div class="card"><h2>Ortak Katkılarının Şirketlere Dağılımı <span class="tiny">geri gelen para düşülmüş NET tutar üzerinden</span></h2>'+
+ (gidenTop&&!_kisit?'<div class="card"><h2>Ortak Katkılarının Şirketlere Dağılımı <span class="tiny">geri gelen para düşülmüş NET tutar üzerinden</span></h2>'+
   '<div style="overflow-x:auto"><table><thead><tr><th>Şirket</th><th class="num">Gönderilen</th><th class="num">Geri Gelen</th><th class="num" title="Gönderilen − Geri Gelen · halen o şirkette duran tutar">NET (halen orada)</th>'+ps.map(function(p){return '<th class="num">'+esc(p.name)+'</th>';}).join('')+'</tr></thead><tbody>'+
   coGiden.map(function(r){return '<tr><td><b style="color:'+r.c.color+'">'+esc(r.c.name)+'</b></td>'+
    '<td class="num">'+fmt0(r.giden)+'</td>'+
@@ -9513,16 +9603,37 @@ function rOrtak(){
 function ortakForm(id){
  if(yetkiYok('ortak.islem','Ortak işlemi yapmak'))return; /* v46 denetim */
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ /* v60 DENETİM (KRİTİK): v60 yalnız OKUMA ekranlarını daralttı; ortak hesabına
+    PARA YAZAN formlar açıkta kaldı. Kendi girişindeki bir ortak, ortak.islem
+    yetkisi varsa başka bir ortağın sermayesine kayıt girebiliyor, ödeme
+    yazabiliyor, hisse oranını değiştirebiliyor ve kaydını silebiliyordu.
+    Düğmeyi gizlemek kapı değildir: data-act adıyla çözülür. */
+ /* Ortak kaydının KENDİSİ (ad, hisse, kullanıcı bağı) ortağa açılamaz: ortak
+    kendi userId bağını silince ortakKisitli() "false"a döner ve v60'ın BÜTÜN
+    kapsam kontrolleri birden kapanırdı — kısıt açığa düşüyordu. */
+ if(ortakKisitli()){toast('⛔ Ortak kaydını yalnızca yönetici düzenler');return;}
  S.partners=S.partners||[];
  var init=id?partnerById(id):{share:0};
  openForm(id?'Ortak Düzenle':'Yeni Ortak',[
   {name:'name',label:'Ad Soyad / Unvan',req:1,ph:'Ör: ERDİNÇ ÇELEBİOĞLU'},
   {row:[{name:'share',label:'Hisse oranı (%)',type:'number',step:'0.01',def:0},{name:'phone',label:'Telefon'}]},
+  /* v60: ortağın uygulamadaki kullanıcısı. Bu bağ olmadan mutabakat tikini ORTAĞIN
+     kendisinin mi, yoksa onun adına bir yöneticinin mi attığı ayırt edilemez. */
+  {name:'userId',label:'👤 Bu ortağın uygulama kullanıcısı — mutabakat onayı bu kullanıcıyla verilir',type:'select',opts:ortakUserOpts()},
   {name:'note',label:'Not',ph:'Ör: kurucu ortak'}
  ],function(o){
-  if(id){applyEdit(init,o);
+  /* bir kullanıcı iki ortağa bağlanamaz — yoksa "ortak onayı" kimin olduğu belirsizleşir */
+  var _uid=String(o.userId||'');
+  /* kullanıcı bağı mutabakatın kimliğidir — değiştirmek süper yönetici işidir */
+  if(id&&_uid!==String(init.userId||'')&&!isSuper()){
+   toast('⛔ Ortağın uygulama kullanıcısını yalnızca süper yönetici değiştirebilir');return;}
+  if(_uid){
+   var _cak=partnerList().find(function(x){return x.userId===_uid&&x.id!==id;});
+   if(_cak){toast('⛔ Bu kullanıcı '+_cak.name+' ortağına bağlı — bir kullanıcı yalnız bir ortağa bağlanabilir');return;}
+  }
+  if(id){applyEdit(init,o);init.userId=_uid;
    ['sermaye','cari','dagitim'].forEach(function(k){var c=findOrtakCari(id,k);if(c)c.name=o.name+' — '+OKIND_LBL[k];});
-  }else{pushRec(S.partners,{id:nid(),co:'merkez',name:o.name,share:+o.share||0,phone:o.phone||'',note:o.note||''});}
+  }else{pushRec(S.partners,{id:nid(),co:'merkez',name:o.name,share:+o.share||0,phone:o.phone||'',userId:_uid,note:o.note||''});}
   save();toast('Ortak kaydedildi');go('ortak');
  },init||{});
 }
@@ -9539,10 +9650,25 @@ function ortakSil(id){
  if(yetkiYok('ortak.islem','Ortak işlemi yapmak'))return; /* v46 denetim */
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
  var p=partnerById(id);if(!p)return;
+ /* v60 DENETİM (KRİTİK): v60 yalnız OKUMA ekranlarını daralttı; ortak hesabına
+    PARA YAZAN formlar açıkta kaldı. Kendi girişindeki bir ortak, ortak.islem
+    yetkisi varsa başka bir ortağın sermayesine kayıt girebiliyor, ödeme
+    yazabiliyor, hisse oranını değiştirebiliyor ve kaydını silebiliyordu.
+    Düğmeyi gizlemek kapı değildir: data-act adıyla çözülür. */
+ if(ortakKisitli()){toast('⛔ Ortak kaydını yalnızca yönetici silebilir');return;}
  var net=ortakNet(id),ck=ortakCekis(id);
  if(Math.abs(net)>0.01||ck>0.01){toast('⛔ '+p.name+' hesabında hareket var (net '+fmt0(net)+') — önce bakiyeyi sıfırlayın, sonra silin');return;}
+ /* v60: bakiyesi sıfır olsa da mutabık kalınmış hareketleri varsa ortak silinemez —
+    silinirse ortağın onayladığı hareketler kaskadla gider ve mutabakat izi kopar */
+ var _mk=ortakHareketler(id).filter(function(t){return ortakMutKilitli(t.id);});
+ if(_mk.length){toast('🔒 '+p.name+' hesabında mutabık kalınmış '+_mk.length+' hareket var — ortak silinemez. Önce ekstresinden o kayıtların mutabakatını bozun.');return;}
  uiConfirm(p.name+' ortak kaydı silinsin mi? (Çöp kutusuna taşınır, 30 gün içinde geri getirilebilir)',function(){
-  softDelete(S.partners,id,'partner',function(r){return 'Ortak: '+r.name;});
+  /* v60 DENETİM: softDelete yetki/şirket erişimi yüzünden REDDEDEBİLİR (null döner).
+     Eskiden kaskad yine koşuyordu: ortak kaydı duruyor, ama üç cari hesabı, tüm
+     hareketleri ve nakit eşleri siliniyor, çöp kutusuna hiçbir şey yazılmıyordu —
+     bakiyeleri sıfırlanmış, geçmişi yok bir ortak kalıyordu. */
+  if(!softDelete(S.partners,id,'partner',function(r){return 'Ortak: '+r.name;})){
+   toast('⛔ Silme yetkiniz yok — ortak kaydı ve geçmişi olduğu gibi duruyor');return;}
   ortakCariCascade(id,false);
   save();toast('Ortak çöp kutusuna taşındı');go('ortak');
  },{danger:1,title:'Silme Onayı',yes:'Evet, Sil'});
@@ -9550,27 +9676,49 @@ function ortakSil(id){
 function ortakEkstre(id){
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
  var p=partnerById(id);if(!p)return;
- var ids={};['sermaye','cari','dagitim'].forEach(function(k){var c=findOrtakCari(id,k);if(c)ids[c.id]=OKIND_LBL[k];});
- var list=S.cariTxns.filter(function(t){return ids[t.cariId]&&!t.deletedAt;}).sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
- var run=0;
+ /* v60: ortak kendi kullanıcısıyla girdiyse YALNIZ kendi ekstresini açabilir */
+ if(!ortakGorunur(id)){toast('⛔ Yalnızca kendi ortak ekstrenizi görebilirsiniz');return;}
+ ortakMutFiltreSifirla(id);
+ var cset=ortakCariIdSet(id),ids={};
+ Object.keys(cset).forEach(function(k){ids[k]=cset[k].lbl;});
+ var list=ortakHareketler(id);
+ /* yürüyen bakiye DAİMA tüm hareketlerden yürür; mutabakat süzgeci yalnız hangi
+    satırın gösterildiğini daraltır (v58'deki bakiye kuralının aynısı) */
+ var run=0,gosterilen=0;
  var rows=list.map(function(t){
   var d=(t.type==='alacak'?1:-1)*+sayiOku(t.amount); run+=d;
-  return '<tr><td>'+dTR(t.date)+'</td><td>'+esc(ids[t.cariId])+'</td><td>'+esc(t.desc||'')+'</td>'+
+  if(!ortakMutGecer(t))return '';
+  gosterilen++;
+  var dur=ortakMutDurum(t);
+  var bg=dur==='degisti'?'background:rgba(239,68,68,.07)':dur==='ok'?'background:rgba(34,197,94,.05)':'';
+  return '<tr style="'+bg+'"><td>'+dTR(t.date)+'</td><td>'+esc(ids[t.cariId]||'')+'</td><td>'+esc(t.desc||'')+'</td>'+
    '<td class="num" style="color:'+(d>0?'var(--pos)':'var(--neg)')+'">'+(d>0?'+':'−')+fmt0(Math.abs(d))+'</td>'+
    '<td class="num"><b>'+fmt0(run)+'</b></td>'+
-   '<td class="rowact"><button class="btn sm dng" data-act="del" data-arg="cariT~'+t.id+'">Sil</button></td></tr>';}).join('');
- document.getElementById('main').innerHTML= topbar('📄 Ortak Ekstresi — '+p.name,
-  '<button class="btn gh" data-act="go" data-arg="ortak">← Ortaklar</button>')+
+   '<td>'+ortakMutHucre(t)+'</td>'+
+   '<td class="rowact">'+(ortakMutKilitli(t.id)
+     ?'<span class="tiny" title="Mutabakatlı kayıt silinemez — önce mutabakatı bozun">🔒</span>'
+     :'<button class="btn sm dng" data-act="del" data-arg="cariT~'+t.id+'">Sil</button>')+'</td></tr>';}).join('');
+ var o=ortakMutOzet(id),uAd=ortakUserAdi(id);
+ document.getElementById('main').innerHTML= topbar('📄 Ortak Ekstresi — '+esc(p.name),
+  '<button class="btn gh" data-act="go" data-arg="ortak">← Ortaklar</button>'+
+  ((o.bekleyen&&!ortakKisitli())?'<button class="btn gh" data-act="ortakMutDevir" data-arg="'+id+'" title="Bu ortağın işaretsiz tüm geçmiş kayıtlarını devir mutabakatı olarak işaretler">✓ Geçmişi Devir Olarak İşaretle</button>':''))+
  '<div class="grid g4" style="margin-bottom:16px">'+
   '<div class="kpi a"><div class="l">Sermaye</div><div class="v">'+fmt0(ortakSermaye(id))+'</div></div>'+
   '<div class="kpi p"><div class="l">Ortak Cari</div><div class="v">'+fmt0(ortakCariBal(id))+'</div></div>'+
   '<div class="kpi n"><div class="l">Çektiği</div><div class="v">'+fmt0(ortakCekis(id))+'</div></div>'+
   '<div class="kpi"><div class="l">Net Pozisyon</div><div class="v">'+fmt0(ortakNet(id))+'</div></div>'+
  '</div>'+
- '<div class="card"><h2>Hareketler <span class="tiny">'+list.length+' kayıt</span></h2>'+
-  (list.length?'<div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Hesap</th><th>Açıklama</th><th class="num">Tutar</th><th class="num">Yürüyen</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+ (list.length?ortakMutOzetSerit(id):'')+
+ '<div class="card"><h2>Hareketler <span class="tiny">'+list.length+' kayıt'+(gosterilen!==list.length?' · '+gosterilen+' gösteriliyor':'')+'</span></h2>'+
+  (list.length
+   ?(gosterilen?'<div style="overflow-x:auto"><table><thead><tr><th>Tarih</th><th>Hesap</th><th>Açıklama</th><th class="num">Tutar</th><th class="num">Yürüyen</th><th>Mutabakat</th><th class="rowact"></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+     :'<div class="empty"><b>Süzgece uyan kayıt yok</b>Yukarıdaki “Tümü” düğmesiyle süzgeci kaldırın.</div>')
    :'<div class="empty"><b>Hareket yok</b>Ortaklar ekranından “Para Girişi” ile ilk kaydı oluşturun.</div>')+
-  '<div class="cardBtns" style="margin-top:12px"><button class="btn sm in" data-act="ortakGirisForm" data-arg="'+id+'">💰 Para Girişi</button><button class="btn sm out" data-act="ortakOdemeForm" data-arg="'+id+'">💸 Ortağa Ödeme</button></div></div>';
+  (ortakKisitli()?'':'<div class="cardBtns" style="margin-top:12px"><button class="btn sm in" data-act="ortakGirisForm" data-arg="'+id+'">💰 Para Girişi</button><button class="btn sm out" data-act="ortakOdemeForm" data-arg="'+id+'">💸 Ortağa Ödeme</button></div>')+
+  '<p class="tiny" style="margin-top:10px"><b>Mutabakat nasıl çalışır:</b> ortak her satırı tek tek onaylar; onayladığı anda kaydın tarihi, tutarı, hesabı ve açıklaması parmak izi olarak saklanır ve kayıt <b>kilitlenir</b> — silinemez. Kayıt sonradan yine de değişirse satır “⚠ mutabakat sonrası değişti” olarak kırmızı çıkar ve onaylanan eski hâli yazılır, yani duran bir tik asla değişmiş bir rakamı meşrulaştırmaz.'+
+  (uAd?' Bu ortağın bağlı kullanıcısı: <b>'+esc(uAd)+'</b> — onayı yalnız bu kullanıcı “ORTAK ONAYI” olarak verebilir.'
+      :' ⚠ Bu ortağa bir uygulama kullanıcısı bağlı değil; bu yüzden buradan atılan tikler yalnızca “yönetici işareti” sayılır. Bağlamak için Ortaklar ekranından ✎ düğmesine basın.')+
+  '</p></div>';
  PAGE='ortak';
 }
 
@@ -9579,6 +9727,12 @@ function ortakGirisForm(pid,init){
  if(yetkiYok('ortak.islem','Ortak işlemi yapmak'))return; /* v46 denetim */
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
  var p=partnerById(pid);if(!p){toast('Ortak bulunamadı');return;}
+ /* v60 DENETİM (KRİTİK): v60 yalnız OKUMA ekranlarını daralttı; ortak hesabına
+    PARA YAZAN formlar açıkta kaldı. Kendi girişindeki bir ortak, ortak.islem
+    yetkisi varsa başka bir ortağın sermayesine kayıt girebiliyor, ödeme
+    yazabiliyor, hisse oranını değiştirebiliyor ve kaydını silebiliyordu.
+    Düğmeyi gizlemek kapı değildir: data-act adıyla çözülür. */
+ if(!ortakGorunur(pid)){toast('⛔ Yalnızca kendi ortak hesabınıza işlem yazabilirsiniz');return;}
  if(!byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).length){toast('⛔ Merkezde aktif kasa/banka hesabı yok — önce Banka & Kasa ekranından hesap açın');return;}
  openForm('💰 Ortaktan Para Girişi — '+p.name,[
   {name:'kind',label:'Bu para ne olarak kaydedilsin?',type:'select',req:1,opts:[
@@ -9612,6 +9766,12 @@ function ortakOdemeForm(pid,init){
  if(yetkiYok('ortak.islem','Ortak işlemi yapmak'))return; /* v46 denetim */
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
  var p=partnerById(pid);if(!p){toast('Ortak bulunamadı');return;}
+ /* v60 DENETİM (KRİTİK): v60 yalnız OKUMA ekranlarını daralttı; ortak hesabına
+    PARA YAZAN formlar açıkta kaldı. Kendi girişindeki bir ortak, ortak.islem
+    yetkisi varsa başka bir ortağın sermayesine kayıt girebiliyor, ödeme
+    yazabiliyor, hisse oranını değiştirebiliyor ve kaydını silebiliyordu.
+    Düğmeyi gizlemek kapı değildir: data-act adıyla çözülür. */
+ if(!ortakGorunur(pid)){toast('⛔ Yalnızca kendi ortak hesabınıza işlem yazabilirsiniz');return;}
  if(!byCo(S.accounts,'merkez').filter(function(a){return a.active!=='0';}).length){toast('⛔ Merkezde aktif kasa/banka hesabı yok');return;}
  openForm('💸 Ortağa Ödeme — '+p.name,[
   {name:'reason',label:'Ödemenin sebebi',type:'select',req:1,opts:[
@@ -9960,6 +10120,8 @@ function merkezDuzelt(icId){
  if(yetkiYok('kayit.duzenle','Kaydı değiştirmek'))return; /* v46 denetim */
  var mct=S.cariTxns.find(function(t){return t.icId===icId&&t.co==='merkez'&&!t.deletedAt;});
  if(!mct){toast('Düzeltilecek işlem bulunamadı');return;}
+ /* v60: "Düzelt" = sil + yeniden aç. Mutabık bir kayıt bu yoldan da değişemez. */
+ if(typeof ortakMutKilitIc==='function'&&ortakMutKilitIc(icId))return;
  var cr=S.cari.find(function(x){return x.id===mct.cariId;});
  var coId=cr&&cr.sys&&String(cr.sys).indexOf('co:')===0?String(cr.sys).slice(3):'';
  if(!coId){toast('Bu işlem şirket hesabına bağlı değil — düzeltmek için silip yeniden girin');return;}
@@ -9988,6 +10150,8 @@ function merkezDuzelt(icId){
 /* ---------- ORTAKLARA HİSSEYE GÖRE KÂR PAYI DAĞITIMI ---------- */
 function ortakKarPayiForm(init){
  if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ /* v60: bu form BÜTÜN ortaklara kayıt yazar — kendi girişindeki bir ortağa kapalı */
+ if(ortakKisitli()){toast('⛔ Kâr payı dağıtımını yalnızca yönetici yapar');return;}
  var ps=partnerList();
  if(!ps.length){toast('Önce ortak tanımlayın');return;}
  var payTop=ps.reduce(function(s,p){return s+(+p.share||0);},0);
@@ -16045,4 +16209,474 @@ function ekstreTaksitNotGuncelle(i){
   var el=document.getElementById('ekTakNot'+i);
   if(el)el.innerHTML=esc(ekstreTaksitNotu(EKSTRE.satirlar[i])||'');
  }catch(e){}
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v60 — ORTAK MUTABAKATI (ortaklarla hesap doğrulama)
+
+   Şikâyet: "Lole merkez içinde ortaklar ve sermaye bölümünde yapılan her işlem
+   için mutabakat tik işareti istiyorum. Ortak mutabık kaldıysa ekstra yanındaki
+   mutabakat düğmesine basacak. Geçmişe yönelik tüm işlemler mutabık kalındı
+   olarak işlensin. Amacımız ortak hesaplarındaki yanlış işlemleri tespit etmek
+   ve onlarla mutabık kalmak."
+
+   Tasarımın dayandığı üç ilke:
+
+    1) BİR TİK, SONRADAN DEĞİŞEN KAYDI MEŞRULAŞTIRMAMALI. Ortak 50.000'lik bir
+       kaydı onaylasın, kayıt sonra 60.000 olsun — duran tik, hiç tik olmamasından
+       kötüdür. Bu yüzden tik atılırken kaydın PARMAK İZİ (tarih|tür|tutar|hesap|
+       açıklama) saklanır ve her görüntülemede karşılaştırılır; tutmuyorsa satır
+       "⚠ MUTABAKAT SONRASI DEĞİŞTİ" olarak kırmızı çıkar ve onaylanan eski hâli
+       yazılır.
+
+    2) MUTABIK KAYIT SİLİNEMEZ (mutabakat kilidi). Silme yolları tek tek değil
+       del() kapısında ve merkezDuzelt'te kapatılır; ayrıca mutabık bir kayıt
+       başka bir yoldan kaybolursa ekranda "silinmiş mutabık kayıt" uyarısı çıkar.
+
+    3) ORTAĞIN KENDİ ONAYI İLE YÖNETİCİ İŞARETİ AYNI ŞEY DEĞİLDİR. Ortak kendi
+       kullanıcısıyla bastıysa "ORTAK ONAYI", başka biri bastıysa "yönetici
+       işareti", geçmişi kapatmak için toplu basıldıysa "DEVİR MUTABAKATI" yazar.
+       Üçü ayrı sayılır; yalnız ilki gerçek mutabakattır.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ───────── ORTAK ↔ KULLANICI BAĞI ─────────
+   Ortağın uygulamada kendi kullanıcısı olabilir (ör. hem ortak hem süper
+   yönetici). Bu bağ olmadan tiki kimin attığı ayırt edilemez. */
+function ortakUserOpts(){
+ return [['','— bağlı kullanıcı yok —']].concat((S.users||[]).map(function(u){
+  var ek=u.role==='super'?' · süper yönetici':u.role==='mudur'?' · müdür':'';
+  return [u.id,(u.displayName||u.username||u.email||'?')+ek];
+ }));
+}
+function ortakUserAdi(pid){
+ var p=partnerById(pid); if(!p||!p.userId)return '';
+ var u=(S.users||[]).find(function(x){return x.id===p.userId;});
+ return u?(u.displayName||u.username||u.email||''):'';
+}
+function ortakBenKim(){
+ try{ if(!SESSION)return '';
+  var p=partnerList().find(function(x){return x.userId&&x.userId===SESSION.id;});
+  return p?p.id:'';
+ }catch(e){return '';}
+}
+/* Ortak kendi girişiyle YALNIZ kendi ekstresini görür. Süper yönetici ya da
+   kullanıcı yönetme yetkisi olan biri (aynı kişi hem ortak hem yönetici
+   olabilir) kısıtlanmaz — yoksa yönetici kendi şirketini göremez hâle gelir. */
+function ortakKisitli(){ try{ return !!(ortakBenKim()&&!isSuper()&&!can('user.yonet')); }catch(e){return false;} }
+function ortakGorunur(pid){ return (!ortakKisitli())||pid===ortakBenKim(); }
+
+/* ───────── MUTABAKAT KAYDI ─────────
+   S.meta.ortakMut[cariTxnId] = {at,by,uid,pid,rol,fp}  ·  rol: ortak|yonetici|devir
+   Kaldırma SİLME DEĞİL, {sil:1,at,by} mezar taşıdır: meta bulutta anahtar anahtar
+   birleştirilir (mergeStates), mezar taşı olmasa kaldırılan tik geri dirilirdi. */
+/* Parmak izi: ortağın onayladığı kaydın FİNANSAL ANLAMINI belirleyen her alan.
+   Denetim dersi: yalnız tarih/tür/tutar/hesap/açıklama bakılıyordu; paranın HANGİ
+   banka hesabından çıktığı (accId / cardId), nakit üretip üretmediği (nakit) ve
+   hangi şirkete yazıldığı (co) değişse tik duruyordu. Açıklama en SONA alındı:
+   içinde '|' olsa bile diğer alanların yerini kaydırmaz. */
+function ortakMutFp(t){
+ if(!t)return '';
+ var a=Math.round((+sayiOku(t.amount)||0)*100)/100;
+ return [t.date||'',t.type||'',a.toFixed(2),t.cariId||'',t.accId||'',t.cardId||'',t.nakit||'',t.co||'',
+         String(t.desc||'').trim()].join('|');
+}
+function ortakMutFpOku(fp){                 /* ekranda "onaylanan hâli" satırı için */
+ var e=String(fp||'').split('|');
+ return {date:e[0]||'',type:e[1]||'',amount:+e[2]||0,cariId:e[3]||'',desc:e.slice(8).join('|')};
+}
+function ortakMutHafiza(){
+ S.meta=S.meta||{};
+ if(!S.meta.ortakMut||typeof S.meta.ortakMut!=='object'||Array.isArray(S.meta.ortakMut))S.meta.ortakMut={};
+ return S.meta.ortakMut;
+}
+function ortakMutKayit(id){
+ try{ if(!id)return null;
+  var r=ortakMutHafiza()[id];
+  if(!r||typeof r!=='object'||r.sil)return null;
+  return r;
+ }catch(e){return null;}
+}
+/* 'yok' · 'ok' · 'degisti' (parmak izi tutmuyor)
+   Denetim dersi: parmak izi OLMAYAN bir işaret eskiden "ok" sayılıyordu. ortakMut
+   v60'ta doğdu, yani parmak izsiz bir işaret ancak elle müdahale ya da bir eşten
+   gelen bozuk veriyle oluşabilir — doğrulanamayan bir tik mutabık sayılmaz.
+   Ayrıca işaretin ORTAĞI ile kaydın şimdiki ortağı tutmalı: kayıt başka bir ortağın
+   hesabına taşınırsa, eski ortağın imzası yeni satırı onaylamış görünmemeli. */
+function ortakMutDurum(t){
+ var r=ortakMutKayit(t&&t.id); if(!r)return 'yok';
+ if(!r.fp)return 'degisti';
+ if(r.fp!==ortakMutFp(t))return 'degisti';
+ if(!r.pid)return 'degisti';   /* hangi ortak adına verildiği bilinmeyen işaret doğrulanamaz */
+ try{
+  var b=ortakCariIdSet('')[t.cariId];
+  if(b&&b.pid&&r.pid!==b.pid)return 'degisti';
+ }catch(e){}
+ return 'ok';
+}
+function ortakMutKilitli(id){ return !!ortakMutKayit(id); }
+function ortakMutRolLbl(r){
+ if(!r)return '';
+ return r.rol==='ortak'?'ORTAK ONAYI':r.rol==='devir'?'DEVİR MUTABAKATI':'yönetici işareti';
+}
+
+/* ───────── ORTAK HESAPLARI VE HAREKETLERİ ───────── */
+function ortakCariIdSet(pid){
+ var out={};
+ (S.cari||[]).forEach(function(c){
+  if(!c||c.co!=='merkez'||!c.sys||c.deletedAt)return;
+  var m=/^ortak:([^:]+):(sermaye|cari|dagitim)$/.exec(String(c.sys));
+  if(!m)return;
+  if(pid&&m[1]!==pid)return;
+  out[c.id]={pid:m[1],kind:m[2],lbl:OKIND_LBL[m[2]]||m[2]};
+ });
+ return out;
+}
+function ortakHareketler(pid){
+ var ids=ortakCariIdSet(pid||'');
+ return (S.cariTxns||[]).filter(function(t){return t&&ids[t.cariId]&&!t.deletedAt;})
+  .sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+}
+function ortakMutOzet(pid){
+ var o={n:0,ortak:0,yonetici:0,devir:0,bekleyen:0,degisti:0};
+ ortakHareketler(pid||'').forEach(function(t){
+  o.n++;
+  var d=ortakMutDurum(t);
+  if(d==='yok'){o.bekleyen++;return;}
+  if(d==='degisti'){o.degisti++;return;}
+  var r=ortakMutKayit(t.id)||{};
+  if(r.rol==='ortak')o.ortak++; else if(r.rol==='devir')o.devir++; else o.yonetici++;
+ });
+ return o;
+}
+
+/* ───────── TİK ───────── */
+function ortakMutIsaretle(id){
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ var t=(S.cariTxns||[]).find(function(x){return x.id===id&&!x.deletedAt;});
+ if(!t){toast('Kayıt bulunamadı ya da silinmiş');return;}
+ var bilgi=ortakCariIdSet('')[t.cariId];
+ if(!bilgi){toast('⛔ Bu kayıt bir ortak hesabına ait değil');return;}
+ if(!ortakGorunur(bilgi.pid)){toast('⛔ Yalnızca kendi ekstrenizde mutabakat verebilirsiniz');return;}
+ var ben=ortakBenKim(),rol=(ben&&ben===bilgi.pid)?'ortak':'yonetici';
+ /* Denetim dersi: tik tek kapısı "ortak ekranını görebilmek"ti; yalnız kayıt
+    girebilen bir kullanıcı kaldıramayacağı kalıcı kilitler kurabiliyordu.
+    Ortağın KENDİSİ her zaman onaylar; başkası için ortak.islem yetkisi şart. */
+ if(rol!=='ortak'&&yetkiYok('ortak.islem','Ortak adına mutabakat işareti koymak'))return;
+ var eski=ortakMutKayit(id),durum=ortakMutDurum(t);
+ /* Denetim dersi (KRİTİK): devir ya da yönetici işareti konmuş bir satır "zaten
+    mutabık" sayılıp reddediliyordu; ortak o satıra ARTIK HİÇ kendi onayını
+    veremiyordu — yani geçmişi toplu kapatmak, gerçek mutabakatı sonsuza kadar
+    imkânsız kılıyordu. Ortağın kendi onayı bir ÜST basamaktır, üzerine yazar. */
+ if(eski&&durum==='ok'&&!(rol==='ortak'&&eski.rol!=='ortak')){
+  toast('Bu kayıt zaten mutabık — kaldırmak için “🔓 Mutabakatı boz”');return;}
+ var _yukselt=!!(eski&&durum==='ok'&&rol==='ortak'&&eski.rol!=='ortak');
+ var yaz=function(){
+  ortakMutHafiza()[id]={at:new Date().toISOString(),by:SESSION?SESSION.username:'',
+   uid:SESSION?SESSION.id:'',pid:bilgi.pid,rol:rol,fp:ortakMutFp(t)};
+  try{logAudit('Ortak mutabakatı',((partnerById(bilgi.pid)||{}).name||'?')+' · '+dTR(t.date)+' · '+
+   fmt0(sayiOku(t.amount))+' · '+(rol==='ortak'?'ORTAK ONAYI':'yönetici işareti')+
+   (_yukselt?' (önceki: '+ortakMutRolLbl(eski)+' — '+(eski.by||'?')+')':eski?' (yenilendi)':''));}catch(e){}
+  save();
+  toast(_yukselt?'✓ Ortak onayı verildi — önceki '+ortakMutRolLbl(eski).toLocaleLowerCase('tr')+' yerine geçti'
+   :rol==='ortak'?'✓ Mutabık kalındı — kayıt artık kilitli':'✓ Yönetici işareti kondu — bu ORTAK ONAYI DEĞİLDİR');
+  ortakEkstre(bilgi.pid);
+ };
+ if(_yukselt){yaz();return;}
+ if(eski&&durum==='degisti'){
+  /* parmak izi alan sırası değişti — elle dilimlemek yerine okuyucudan geçir
+     (eskiden e[4] açıklama idi, artık accId; onay metninde hesap kodu yazıyordu) */
+  var f=ortakMutFpOku(eski.fp);
+  uiConfirm('Bu kayıt mutabakattan SONRA değişti.\n\nOnaylanan hâli: '+dTR(f.date)+' · '+fmt0(f.amount)+(f.desc?' · '+f.desc:'')+
+   '\nŞimdiki hâli: '+dTR(t.date)+' · '+fmt0(sayiOku(t.amount))+(t.desc?' · '+t.desc:'')+
+   '\n\nYeni hâli mutabık sayılsın mı? (eski onay kaydı audit günlüğünde kalır)',yaz,
+   {title:'Değişmiş Kaydı Yeniden Onayla',yes:'Evet, Yeni Hâlini Onayla'});
+  return;
+ }
+ yaz();
+}
+/* ───────── MUTABAKATI BOZ ─────────
+   Ortağın KENDİ onayını yalnız o ortak ya da süper yönetici kaldırabilir;
+   yönetici işareti / devir mutabakatını ortak işlemi yetkisi olan kaldırabilir. */
+function ortakMutBoz(id){
+ var r=ortakMutKayit(id);
+ if(!r){toast('Bu kayıtta mutabakat işareti yok');return;}
+ var t=(S.cariTxns||[]).find(function(x){return x.id===id;});
+ var ben=ortakBenKim();
+ /* Denetim dersi (KRİTİK): kapsam kontrolü yalnız EKRAN ÇİZİMİNDE vardı, bu
+    MUTASYONDA yoktu. Kendi girişindeki bir ortak, ortak.islem yetkisi varsa
+    BAŞKA bir ortağın devir/yönetici işaretini kaldırıp kaydı silebiliyordu. */
+ if(!ortakGorunur(r.pid)){toast('⛔ Yalnızca kendi ekstrenizdeki mutabakatı bozabilirsiniz');return;}
+ if(r.rol==='ortak'&&!isSuper()&&ben!==r.pid){
+  toast('⛔ Ortağın kendi onayını yalnızca o ortak ya da süper yönetici kaldırabilir');return;}
+ if(r.rol!=='ortak'&&yetkiYok('ortak.islem','Mutabakat işaretini kaldırmak'))return;
+ var pAd=((partnerById(r.pid)||{}).name)||'?';
+ uiConfirm(pAd+' — '+(t?dTR(t.date)+' · '+fmt0(sayiOku(t.amount)):'kayıt')+'\n\n'+
+  ortakMutRolLbl(r)+' ('+(r.by||'?')+(r.at?', '+new Date(r.at).toLocaleString('tr-TR'):'')+') kaldırılacak. '+
+  'Kayıt değişmez, yalnızca kilidi açılır ve yeniden "mutabık değil" listesine düşer. Bu işlem denetim günlüğüne yazılır.',
+ function(){
+  ortakMutHafiza()[id]={sil:1,at:new Date().toISOString(),by:SESSION?SESSION.username:''};
+  try{logAudit('Ortak mutabakatı bozuldu',pAd+' · '+(t?dTR(t.date)+' · '+fmt0(sayiOku(t.amount)):id)+' · önceki: '+ortakMutRolLbl(r)+' ('+(r.by||'?')+')');}catch(e){}
+  save();toast('🔓 Mutabakat kaldırıldı — kayıt yeniden düzenlenebilir');
+  if(r.pid&&partnerById(r.pid))ortakEkstre(r.pid); else go('ortak');
+ },{danger:1,title:'Mutabakatı Boz',yes:'Evet, Kilidi Aç'});
+}
+/* ───────── DEVİR MUTABAKATI (geçmişi toplu kapatma) ───────── */
+function ortakMutDevir(pid){
+ if(yetkiYok('ortak.islem','Toplu mutabakat işaretlemek'))return;
+ if(!canAccessCo('ortak')){toast('⛔ Ortaklar & Sermaye ekranı için ayrı yetki gerekir');return;}
+ if(pid&&!partnerById(pid)){toast('Ortak bulunamadı');return;}
+ /* Denetim dersi: kapsam kontrolü yoktu — kendi girişindeki bir ortak, BÜTÜN
+    ortakların geçmişini toplu damgalayıp kilitleyebiliyordu. */
+ if(ortakKisitli()){toast('⛔ Toplu işaret yalnızca yönetici tarafından konur — kendi ekstrenizdeki satırları tek tek onaylayın');return;}
+ var list=ortakHareketler(pid||'').filter(function(t){return !ortakMutKayit(t.id);});
+ if(!list.length){toast('İşaretlenecek kayıt yok — bu hesapların tamamı zaten işaretli');return;}
+ var kimin=pid?((partnerById(pid)||{}).name||''):'TÜM ORTAKLAR';
+ uiConfirm(kimin+' · '+list.length+' kayıt "DEVİR MUTABAKATI" olarak işaretlenecek.\n\n'+
+  '⚠ Bu bir ORTAK ONAYI DEĞİLDİR. Geçmişi kapatmak için konan toplu işarettir; ekranda ayrı renkte görünür ve özette ayrı sayılır.\n\n'+
+  'İşaretlenen kayıtlar KİLİTLENİR: silmek ya da düzeltmek için tek tek "🔓 Mutabakatı boz" demeniz gerekir. Kayıtların kendisi değişmez.',
+ function(){
+  var H=ortakMutHafiza(),now=new Date().toISOString(),by=SESSION?SESSION.username:'',uid=SESSION?SESSION.id:'';
+  var ids=ortakCariIdSet(pid||'');
+  list.forEach(function(t){
+   H[t.id]={at:now,by:by,uid:uid,pid:(ids[t.cariId]||{}).pid||'',rol:'devir',fp:ortakMutFp(t)};
+  });
+  try{logAudit('Devir mutabakatı',kimin+' — '+list.length+' kayıt toplu işaretlendi');}catch(e){}
+  save();toast('✓ '+list.length+' kayıt devir mutabakatı olarak işaretlendi');
+  if(pid)ortakEkstre(pid); else go('ortak');
+ },{title:'Devir Mutabakatı',yes:'Evet, Geçmişi İşaretle'});
+}
+
+/* ───────── MUTABAKAT KİLİDİ ─────────
+   Silme yolları tek tek değil del() kapısında kapatılır. 'tx' ve 'cardT' de
+   dâhildir: ortak para girişinin nakit eşi silinince cariTxn kaskadla gidiyordu. */
+/* Denetim dersi: ilk hâli yalnız 4 türü tanıyordu. del('card') ise kartın tüm
+   hareketlerini ve onların cari eşlerini kaskadla siliyor — kartla ödenmiş,
+   ORTAK ONAYLI bir kâr payı satırı tek tuşla yok oluyordu. Aşağıdaki eşleme
+   del() içindeki kaskad dallarının aynısıdır; ayrıca kaydın GRUP İÇİ (icId)
+   kardeşleri de sayılır, çünkü icCascade onları da götürür. */
+function ortakMutCariTxnAdaylari(kind,id){
+ /* 20.000 satırlık bir caride indexOf ile tekilleştirme silme tuşunu 300 ms
+    donduruyordu — anahtarlı küme ile O(n) */
+ var ct=[],_gor={},push=function(a){a.forEach(function(x){if(x&&!_gor[x]){_gor[x]=1;ct.push(x);}});};
+ var CT=S.cariTxns||[],TX=S.txns||[],KT=S.cardTxns||[];
+ var idsOf=function(arr){return arr.map(function(x){return x.id;});};
+ if(kind==='cariT')push([id]);
+ else if(kind==='cari')push(idsOf(CT.filter(function(x){return x.cariId===id;})));
+ else if(kind==='tx'){var r=TX.find(function(x){return x.id===id;});
+  /* katDuzeltme kaydında del() BİLEREK yukarı kaskad yapmaz — onu da kilitlemek
+     ilgisiz bir satırı silinemez gösterirdi */
+  if(r){ if(r.cariTxnId&&!r.katDuzeltme)push([r.cariTxnId]);
+   if(r.cardTxnId)push(KT.filter(function(x){return x.id===r.cardTxnId&&x.cariTxnId;}).map(function(x){return x.cariTxnId;}));
+   if(r.cekId)push(idsOf(CT.filter(function(x){return x.cekId===r.cekId;})));
+   if(r.posEId)push(idsOf(CT.filter(function(x){return x.posEId===r.posEId;})));
+   if(r.stokTxnId)push(idsOf(CT.filter(function(x){return x.stokTxnId===r.stokTxnId;})));
+   if(r.assetId)push(idsOf(CT.filter(function(x){return x.assetId===r.assetId;}))); } }
+ else if(kind==='cardT'){var c=KT.find(function(x){return x.id===id;}); if(c&&c.cariTxnId)push([c.cariTxnId]);}
+ else if(kind==='card')push(KT.filter(function(x){return x.cardId===id&&x.cariTxnId;}).map(function(x){return x.cariTxnId;}));
+ else if(kind==='pos'){var pe=(S.posEntries||[]).filter(function(x){return x.posId===id;}).map(function(x){return x.id;});
+  push(idsOf(CT.filter(function(x){return x.posEId&&pe.indexOf(x.posEId)>-1;})));}
+ else if(kind==='posE')push(idsOf(CT.filter(function(x){return x.posEId===id;})));
+ else if(kind==='cek')push(idsOf(CT.filter(function(x){return x.cekId===id;})));
+ else if(kind==='stokT')push(idsOf(CT.filter(function(x){return x.stokTxnId===id;})));
+ else if(kind==='stok'){var si=(S.stockTxns||[]).filter(function(x){return x.itemId===id;}).map(function(x){return x.id;});
+  push(idsOf(CT.filter(function(x){return x.stokTxnId&&si.indexOf(x.stokTxnId)>-1;})));}
+ else if(kind==='asset')push(idsOf(CT.filter(function(x){return x.assetId===id;})));
+ else if(kind==='fixed'){var lt=(S.fixedLogs||[]).filter(function(l){return l.fixedId===id&&l.txnId;}).map(function(l){return l.txnId;});
+  /* del('fixed') cariTxns'e DOKUNMAZ; yalnız icSweep'in götürebileceği grup içi
+     bacaklar sayılır — fazlası ilgisiz kayıtları kilitli gösterir */
+  push(TX.filter(function(x){return lt.indexOf(x.id)>-1&&x.cariTxnId&&x.icId;}).map(function(x){return x.cariTxnId;}));}
+ else if(kind==='fixedL'){var l=(S.fixedLogs||[]).find(function(z){return z.id===id;});
+  if(l&&l.txnId){var lt2=TX.find(function(x){return x.id===l.txnId;});
+   if(lt2){ if(lt2.cariTxnId)push([lt2.cariTxnId]);
+    if(lt2.cardTxnId)push(KT.filter(function(x){return x.id===lt2.cardTxnId&&x.cariTxnId;}).map(function(x){return x.cariTxnId;})); }}}
+ /* grup içi kardeşler: icCascade bu kayıtların hepsini birlikte götürür */
+ try{
+  var _ic=(typeof icRecFind==='function')?icRecFind(kind,id):null;
+  var _icid=_ic&&_ic.icId;
+  if(!_icid&&kind==='cariT'){var _s=CT.find(function(x){return x.id===id;}); _icid=_s&&_s.icId;}
+  if(_icid)push(idsOf(CT.filter(function(x){return x.icId===_icid;})));
+ }catch(e){}
+ return ct;
+}
+function ortakMutKilitBul(kind,id){
+ try{ return ortakMutCariTxnAdaylari(kind,id).filter(function(x){return ortakMutKilitli(x);}); }
+ catch(e){return [];}
+}
+function ortakMutKilitMesaj(ids){
+ var r=ortakMutKayit(ids[0])||{};
+ return '🔒 MUTABAKATLI KAYIT — silinemez. '+ortakMutRolLbl(r)+': '+(r.by||'?')+
+  (r.at?', '+new Date(r.at).toLocaleString('tr-TR'):'')+
+  (ids.length>1?' (ve '+(ids.length-1)+' kayıt daha)':'')+
+  ' · Önce Ortaklar → Ekstre ekranından “🔓 Mutabakatı boz” deyin.';
+}
+function ortakMutKilitUyar(kind,id){
+ var k=ortakMutKilitBul(kind,id);
+ if(!k.length)return false;
+ toast(ortakMutKilitMesaj(k));
+ return true;
+}
+function ortakMutKilitIc(icId){
+ try{
+  var k=(S.cariTxns||[]).filter(function(x){return x.icId===icId&&ortakMutKilitli(x.id);}).map(function(x){return x.id;});
+  if(!k.length)return false;
+  toast(ortakMutKilitMesaj(k));
+  return true;
+ }catch(e){return false;}
+}
+
+/* ───────── SİLİNMİŞ MUTABIK KAYIT (yetim işaret) ─────────
+   Kilit her yolu kapatsa da eski veri, bulut birleştirmesi ya da çöp kutusu
+   üzerinden mutabık bir kayıt kaybolabilir. Sessiz kalmaz. */
+function ortakMutYetim(){
+ var out=[];
+ try{
+  var H=ortakMutHafiza();
+  Object.keys(H).forEach(function(k){
+   var r=H[k]; if(!r||typeof r!=='object'||r.sil)return;
+   var t=(S.cariTxns||[]).find(function(x){return x.id===k;});
+   if(!t||t.deletedAt)out.push({id:k,kayit:r,silindi:!!(t&&t.deletedAt)});
+  });
+ }catch(e){}
+ return out;
+}
+function ortakMutYetimTemizle(){
+ /* Denetim dersi: bu, "mutabık bir kayıt yok edilmiş" diyen TEK ekranı silen
+    düğmedir. ortak.islem yetkisi olan herkese — hatta silinen kaydın karşı
+    tarafındaki ortağa — açıktı. Artık yalnız süper yönetici ve her işaretin
+    kimliği (ortak, rol, imzalayan, tarih, tutar) günlüğe tek tek yazılır. */
+ if(!isSuper()){toast('⛔ Bu işlemi yalnızca süper yönetici yapabilir — silinen mutabık kayıtların izini siler');return;}
+ if(yetkiYok('ortak.islem','Yetim mutabakat işaretlerini temizlemek'))return;
+ var y=ortakMutYetim();
+ if(!y.length){toast('Yetim mutabakat işareti yok');return;}
+ uiConfirm(y.length+' adet mutabık işaret, karşılığı olan kayıt bulunamadığı için düşecek.\n\n'+
+  'Bunu YALNIZCA silinen kayıtların gerçekten silinmesi gerektiğini ortakla teyit ettikten sonra yapın — '+
+  'aksi halde mutabakat izi kaybolur. Kayıtlar çöp kutusunda duruyorsa önce oradan geri getirmeyi düşünün.',
+ function(){
+  var H=ortakMutHafiza(),now=new Date().toISOString(),by=SESSION?SESSION.username:'';
+  var iz=y.map(function(x){
+   var f=ortakMutFpOku(x.kayit.fp);
+   return (((partnerById(x.kayit.pid)||{}).name)||x.kayit.pid||'?')+' · '+ortakMutRolLbl(x.kayit)+
+    ' · '+(x.kayit.by||'?')+' · '+(f.date?dTR(f.date):'?')+' · '+fmt0(f.amount)+(f.desc?' · '+f.desc:'');
+  });
+  y.forEach(function(x){H[x.id]={sil:1,at:now,by:by};});
+  try{logAudit('Yetim mutabakat işareti temizlendi',y.length+' işaret — '+iz.join(' | ').slice(0,900));}catch(e){}
+  save();toast('✓ '+y.length+' yetim işaret düştü');go('ortak');
+ },{danger:1,title:'Yetim İşaretleri Temizle',yes:'Evet, Temizle'});
+}
+/* ───────── ORTAK KULLANICISININ YETKİ UYARISI ─────────
+   Kısıtlama yalnızca ortak ekranlarını daraltır. Ortağın kullanıcısına 🏛 Merkez
+   Kasa ya da şirket yetkisi de verilmişse o kişi merkez/geçmiş/rapor ekranlarından
+   diğer ortakların hareketlerini görebilir. Bu sessiz kalmaz. */
+function ortakYetkiUyariKarti(){
+ try{
+  var sorun=[];
+  partnerList().forEach(function(p){
+   if(!p.userId)return;
+   var u=(S.users||[]).find(function(x){return x.id===p.userId;});
+   if(!u)return;
+   if(u.role==='super'){sorun.push([p.name,(u.displayName||u.username||'?'),'süper yönetici — tüm defterleri görür']);return;}
+   var c=Array.isArray(u.companies)?u.companies:(u.companies==='all'?['all']:[]);
+   var genis=c.filter(function(x){return x!=='ortak';});
+   if(u.companies==='all')sorun.push([p.name,(u.displayName||u.username||'?'),'tüm şirketlere erişimi var']);
+   else if(genis.length)sorun.push([p.name,(u.displayName||u.username||'?'),genis.map(function(x){return accessLabel(x)||x;}).join(', ')+' erişimi var']);
+  });
+  if(!sorun.length)return '';
+  return '<div class="card" style="margin-bottom:12px;padding:10px 14px"><div><span class="chip w">ℹ Ortak kullanıcılarının görebildikleri</span></div>'+
+   '<p class="tiny" style="margin-top:6px">Ortak kendi girişinde <b>Ortaklar ekranında</b> yalnız kendi hesabını görür. Ancak aşağıdaki kullanıcıların '+
+   'başka defterlere de yetkisi var; merkez, geçmiş ve rapor ekranlarından <b>diğer ortakların hareketlerini de görebilirler</b>. '+
+   'Yalnız kendi hesabını görmesi gerekiyorsa Ayarlar → Kullanıcı Yönetimi’nden o kullanıcıya <b>sadece 👥 Ortaklar</b> yetkisi bırakın.</p>'+
+   '<ul class="tiny" style="margin:6px 0 0 18px">'+sorun.map(function(x){
+    return '<li><b>'+esc(x[0])+'</b> → 👤 '+esc(x[1])+' · '+esc(x[2])+'</li>';}).join('')+'</ul></div>';
+ }catch(e){return '';}
+}
+function ortakMutYetimKarti(){
+ var y=ortakMutYetim();
+ if(!y.length)return '';
+ return '<div class="card" style="margin-bottom:16px;border-color:var(--neg)"><h2>⚠ Mutabık Olunan '+y.length+' Kayıt ARTIK YOK</h2>'+
+  '<p class="mut">Ortakla mutabık kalınmış bu kayıtlar silinmiş ya da bulunamıyor. Mutabakat sonrası silinen bir kayıt, '+
+  'ortağın onayladığı bakiyeyi sessizce değiştirir — ortakla teyit edilmesi gerekir.</p>'+
+  '<div style="overflow-x:auto"><table><thead><tr><th>Ortak</th><th>Mutabakat</th><th>İşaretleyen</th><th>Tarih</th></tr></thead><tbody>'+
+  y.slice(0,20).map(function(x){
+   return '<tr><td>'+esc(((partnerById(x.kayit.pid)||{}).name)||'—')+'</td>'+
+    '<td><span class="chip n">'+esc(ortakMutRolLbl(x.kayit))+'</span>'+(x.silindi?' <span class="tiny">çöp kutusunda</span>':' <span class="tiny">kayıt yok</span>')+'</td>'+
+    '<td class="tiny">'+esc(x.kayit.by||'—')+'</td>'+
+    '<td class="tiny">'+(x.kayit.at?new Date(x.kayit.at).toLocaleString('tr-TR'):'—')+'</td></tr>';}).join('')+
+  '</tbody></table></div>'+
+  (y.length>20?'<p class="tiny">… ve '+(y.length-20)+' kayıt daha</p>':'')+
+  '<div class="cardBtns" style="margin-top:12px"><button class="btn sm gh" data-act="go" data-arg="trash">🗑 Çöp Kutusu</button>'+
+  '<button class="btn sm dng" data-act="ortakMutYetimTemizle">İşaretleri düş</button></div></div>';
+}
+
+/* ───────── EKSTRE: SÜZGEÇ, ÖZET VE SATIR HÜCRESİ ───────── */
+var _ortMutF='hepsi';   /* hepsi · bekleyen · degisti · mutabik */
+var _ortMutFP='';       /* süzgecin hangi ortağa ait olduğu */
+/* v59'da öğrenilen ders: ekran süzgeci BİR SONRAKİ kayda taşınmamalı. Başka bir
+   ortağın ekstresi açılınca süzgeç kendiliğinden sıfırlanır; aksi halde kullanıcı
+   dolu bir ekstreyi boş görür ve sebebini anlamaz. */
+function ortakMutFiltreSifirla(pid){ if(_ortMutFP!==pid){_ortMutF='hepsi';_ortMutFP=pid||'';} }
+/* data-arg="filtre~ortakId" — merkezi olay sistemi yalnız data-arg'ı '~' ile böler,
+   element ikinci argüman olarak GELMEZ (yalnız data-actv öyle çalışır). */
+function ortakMutFiltre(v,pid){
+ _ortMutF=(['hepsi','bekleyen','degisti','mutabik'].indexOf(String(v))>-1)?String(v):'hepsi';
+ if(pid&&partnerById(pid))ortakEkstre(pid);
+}
+function ortakMutGecer(t){
+ var d=ortakMutDurum(t);
+ if(_ortMutF==='bekleyen')return d==='yok';
+ if(_ortMutF==='degisti')return d==='degisti';
+ if(_ortMutF==='mutabik')return d==='ok';
+ return true;
+}
+function ortakMutOzetSerit(pid){
+ var o=ortakMutOzet(pid);
+ var chip=function(cls,n,lbl,ttl){return '<span class="chip '+cls+'" title="'+ttl+'">'+n+' '+lbl+'</span>';};
+ return '<div class="card" style="margin-bottom:12px;padding:10px 14px">'+
+  '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">'+
+  '<b style="margin-right:4px">Mutabakat:</b>'+
+  chip('g',o.ortak,'ortak onaylı','Ortak kendi kullanıcısıyla onayladı — gerçek mutabakat')+
+  (o.devir?chip('w',o.devir,'devir','Geçmişi kapatmak için toplu işaretlendi — ortak onayı değil'):'')+
+  (o.yonetici?chip('w',o.yonetici,'yönetici işaretli','Ortak adına yönetici işaretledi — ortak onayı değil'):'')+
+  chip('',o.bekleyen,'bekliyor','Henüz mutabık kalınmadı')+
+  (o.degisti?chip('n',o.degisti,'⚠ sonradan değişti','Mutabakattan sonra kaydın tarihi/tutarı/açıklaması değişti'):'')+
+  '</div>'+
+  '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">'+
+   [['hepsi','Tümü ('+o.n+')'],['bekleyen','Bekleyenler ('+o.bekleyen+')'],['mutabik','Mutabıklar ('+(o.ortak+o.devir+o.yonetici)+')'],['degisti','⚠ Değişenler ('+o.degisti+')']]
+    .map(function(f){return '<button class="btn sm'+(_ortMutF===f[0]?'':' gh')+'" data-act="ortakMutFiltre" data-arg="'+f[0]+'~'+esc(pid)+'">'+f[1]+'</button>';}).join('')+
+  '</div>'+
+  (o.ortak<o.n?'<p class="tiny" style="margin-top:8px">Yalnız <b>ortak onaylı</b> satırlar gerçek mutabakattır; devir ve yönetici işaretleri geçmişi kapatmak içindir. Ortak kendi kullanıcısıyla girip bu ekrandan onaylarsa satır yeşile döner.</p>':'')+
+  '</div>';
+}
+function ortakMutHucre(t){
+ var d=ortakMutDurum(t),r=ortakMutKayit(t.id);
+ if(d==='yok')
+  return '<button class="btn sm gh" data-act="ortakMutIsaretle" data-arg="'+t.id+'" title="Bu kaydın doğru işlendiğini onaylıyorum">☐ Mutabık değil</button>';
+ var imza='<div class="tiny">'+esc(r.by||'?')+(r.at?' · '+new Date(r.at).toLocaleString('tr-TR'):'')+'</div>';
+ if(d==='degisti'){
+  var f=ortakMutFpOku(r.fp);
+  return '<span class="chip n">⚠ MUTABAKAT SONRASI DEĞİŞTİ</span>'+
+   (r.fp?'<div class="tiny">onaylanan: '+dTR(f.date)+' · '+fmt0(f.amount)+(f.desc?' · '+esc(f.desc):'')+'</div>'
+        :'<div class="tiny">⚠ bu işaretin parmak izi yok — hangi hâlin onaylandığı doğrulanamıyor</div>')+imza+
+   '<div style="margin-top:4px"><button class="btn sm" data-act="ortakMutIsaretle" data-arg="'+t.id+'" title="Kaydın yeni hâlini onayla">✓ Yeni hâlini onayla</button> '+
+   '<button class="btn sm dng" data-act="ortakMutBoz" data-arg="'+t.id+'">🔓 Boz</button></div>';
+ }
+ var cls=r.rol==='ortak'?'g':'w';
+ /* Ortağın kendi onayı bir ÜST basamaktır: devir/yönetici işaretli bir satırda
+    ortak hâlâ kendi onayını verebilir (denetimde çıkan kilitlenme). */
+ var benim=(ortakBenKim()&&ortakBenKim()===r.pid&&r.rol!=='ortak');
+ return '<span class="chip '+cls+'">'+(r.rol==='ortak'?'✓ MUTABIK':r.rol==='devir'?'✓ devir':'✓ yönetici')+'</span>'+imza+
+  '<div style="margin-top:4px">'+
+  (benim?'<button class="btn sm" data-act="ortakMutIsaretle" data-arg="'+t.id+'" title="Bu satırı kendi onayımla mutabık kılıyorum">✓ Ortak onayı ver</button> ':'')+
+  '<button class="btn sm dng" data-act="ortakMutBoz" data-arg="'+t.id+'" title="Kilidi aç — kayıt düzenlenebilir hâle gelir">🔓 Mutabakatı boz</button></div>';
+}
+/* Ortaklar ekranındaki kart üzerindeki tek satırlık durum */
+function ortakMutKartChip(pid){
+ var o=ortakMutOzet(pid);
+ if(!o.n)return '';
+ if(o.degisti)return '<span class="chip n" title="Mutabakattan sonra değişmiş kayıt var">⚠ '+o.degisti+' kayıt mutabakat sonrası değişti</span>';
+ if(o.bekleyen)return '<span class="chip w" title="Ortağın onayı bekleniyor">'+o.bekleyen+' kayıt mutabık değil</span>';
+ if(o.ortak===o.n)return '<span class="chip g">✓ tamamı ortak onaylı</span>';
+ /* Denetim dersi: ortak onayı SIFIR olduğu hâlde yeşil "✓ mutabık" basılıyordu —
+    tam da ayırmak için kurulan üç işaret türünü birbirine karıştırıyordu. */
+ if(!o.ortak)return '<span class="chip w" title="'+o.devir+' devir · '+o.yonetici+' yönetici işareti — ortak onayı yok">⚠ ortak onayı yok · '+(o.devir+o.yonetici)+' ön işaret</span>';
+ return '<span class="chip g" title="'+o.ortak+' ortak onaylı · '+o.devir+' devir · '+o.yonetici+' yönetici">✓ kısmen mutabık ('+o.ortak+'/'+o.n+' ortak onaylı)</span>';
 }
